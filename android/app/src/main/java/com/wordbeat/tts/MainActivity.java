@@ -109,14 +109,17 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 if (insetScript != null) view.evaluateJavascript(insetScript, null);
                 pageReady = true;
-                // onResume() already fired once before this, on the cold-start
-                // path — too early for pageReady to be true yet, so a fresh
-                // launch would otherwise never get the one check that matters
-                // most (you copied something, then opened the app for it).
-                // Skipped when a Share just delivered content on this same
-                // launch — surfacing an unrelated "paste this?" banner right
-                // on top of content the user just deliberately shared in
-                // would read as noise, not help.
+                // The window may already have focus by the time a cold
+                // launch's page finishes loading, in which case
+                // onWindowFocusChanged(true) below already fired once with
+                // pageReady still false — too early to do anything. Without
+                // this explicit check here too, a fresh launch would then
+                // never get the one check that matters most (you copied
+                // something, then opened the app for it). Skipped when a
+                // Share just delivered content on this same launch —
+                // surfacing an unrelated "paste this?" banner right on top
+                // of content the user just deliberately shared in would
+                // read as noise, not help.
                 boolean hadShare = pendingSharedText != null;
                 deliverPendingShare();
                 if (!hadShare) view.evaluateJavascript("checkClipboardOnResume()", null);
@@ -251,16 +254,24 @@ public class MainActivity extends Activity {
     }
 
     /*
-     * Checked on every return to the foreground, not just a cold launch —
-     * checkClipboardOnResume() only ever offers a paste, never performs one
-     * on its own, so there is nothing destructive about asking often. The
-     * page itself decides whether anything has actually changed since the
-     * last time it asked.
+     * Deliberately NOT triggered from onResume(): onResume() runs before the
+     * window has actually regained input focus when switching back from
+     * another app, and ClipboardManager.getPrimaryClip() can silently return
+     * a stale or empty clip for a window that isn't focused yet — the app
+     * would work once, right after a cold launch (onPageFinished's own load
+     * time incidentally gives the window time to gain focus first), then
+     * appear to stop noticing new clipboard content on every later return,
+     * because the read kept losing that race. onWindowFocusChanged(true) is
+     * the actual, documented signal that focus has landed. Checked every
+     * time focus is (re)gained, not just a cold launch — checkClipboardOnResume()
+     * only ever offers a paste, never performs one on its own, so there is
+     * nothing destructive about asking often; the page itself decides
+     * whether anything has actually changed since the last time it asked.
      */
     @Override
-    protected void onResume() {
-        super.onResume();
-        if (pageReady) web.evaluateJavascript("checkClipboardOnResume()", null);
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && pageReady) web.evaluateJavascript("checkClipboardOnResume()", null);
     }
 
     @Override
