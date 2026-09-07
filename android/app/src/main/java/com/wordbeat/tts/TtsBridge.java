@@ -13,8 +13,15 @@ import android.webkit.WebView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Bridges Android's native TextToSpeech to the web app's engine interface.
@@ -205,11 +212,105 @@ public class TtsBridge {
         }
     }
 
+    private static final int FETCH_TIMEOUT_MS = 15000;
+    // A generous cap for an article page, not a general-purpose download
+    // limit — this exists so a mistaken link to a huge file can't hang the
+    // app or blow through memory, not to police legitimate pages.
+    private static final int MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+    private final ExecutorService fetchExecutor = Executors.newSingleThreadExecutor();
+
+    /**
+     * Fetches a URL's raw HTML natively, bypassing the browser's CORS wall
+     * entirely — CORS is a JS-in-a-browser restriction, not a limit on a
+     * native HTTP request, the same reason readClipboardText() above
+     * sidesteps the WebView clipboard-permission wall instead of trying to
+     * work around it in JS. Deliberately asynchronous, unlike the clipboard
+     * methods: those are instant local OS calls, but a network request can
+     * take seconds, and a @JavascriptInterface method blocks the page's JS
+     * until it returns, so a synchronous version here would freeze the app.
+     * The result comes back later via window.onUrlFetched(url, html, error).
+     */
+    @JavascriptInterface
+    public void fetchUrl(String urlString) {
+        fetchExecutor.execute(() -> {
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(urlString);
+                String protocol = url.getProtocol();
+                if (!"http".equals(protocol) && !"https".equals(protocol)) {
+                    callback(urlString, null, "Only http/https links are supported.");
+                    return;
+                }
+
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(FETCH_TIMEOUT_MS);
+                conn.setReadTimeout(FETCH_TIMEOUT_MS);
+                conn.setInstanceFollowRedirects(true);
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; WordBeat/1.0)");
+                conn.setRequestProperty("Accept", "text/html,application/xhtml+xml");
+
+                int code = conn.getResponseCode();
+                if (code < 200 || code >= 300) {
+                    callback(urlString, null, "The page returned an error (HTTP " + code + ").");
+                    return;
+                }
+
+                String contentType = conn.getContentType();
+                if (contentType != null && !contentType.toLowerCase(Locale.US).contains("html")) {
+                    callback(urlString, null, "That link isn't a web page — it looks like " + contentType + ".");
+                    return;
+                }
+
+                byte[] bytes = readWithLimit(conn.getInputStream(), MAX_RESPONSE_BYTES);
+                String charset = extractCharset(contentType);
+                String html = new String(bytes, charset != null ? charset : "UTF-8");
+                callback(urlString, html, null);
+            } catch (Exception e) {
+                String message = e.getMessage();
+                callback(urlString, null, "Couldn't reach that page" + (message != null ? ": " + message : "."));
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        });
+    }
+
+    private void callback(String url, String html, String error) {
+        String js = "window.onUrlFetched && window.onUrlFetched("
+                + JSONObject.quote(url) + ","
+                + (html != null ? JSONObject.quote(html) : "null") + ","
+                + (error != null ? JSONObject.quote(error) : "null") + ")";
+        web.post(() -> web.evaluateJavascript(js, null));
+    }
+
+    private static String extractCharset(String contentType) {
+        if (contentType == null) return null;
+        for (String part : contentType.split(";")) {
+            String trimmed = part.trim();
+            if (trimmed.toLowerCase(Locale.US).startsWith("charset=")) {
+                return trimmed.substring(8).trim().replace("\"", "");
+            }
+        }
+        return null;
+    }
+
+    private static byte[] readWithLimit(InputStream in, int limit) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int total = 0, n;
+        while ((n = in.read(buf)) != -1) {
+            total += n;
+            if (total > limit) throw new IOException("That page is too large to fetch.");
+            out.write(buf, 0, n);
+        }
+        return out.toByteArray();
+    }
+
     void shutdown() {
         try {
             tts.stop();
             tts.shutdown();
         } catch (Exception ignored) {
         }
+        fetchExecutor.shutdownNow();
     }
 }

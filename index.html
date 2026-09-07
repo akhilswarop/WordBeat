@@ -2833,6 +2833,125 @@ function handlePastedText(text, html = null) {
   });
 }
 
+/* --------------------------- web articles --------------------------- *
+ * A shared or pasted link is fetched natively (see fetchUrl in
+ * TtsBridge.java) — CORS blocks an arbitrary cross-origin fetch from the
+ * page's own JS, but that is a browser restriction, not a limit on the
+ * native HTTP request the Android side makes instead. There is no
+ * equivalent path on desktop, so this whole section is Android-only;
+ * fetchAndReadUrl says so plainly rather than failing silently.
+ * ---------------------------------------------------------------------- */
+
+const READABILITY_URL = "https://cdn.jsdelivr.net/npm/@mozilla/readability@0.6.0/Readability.js";
+let readabilityPromise = null;
+
+/** Fetched only the first time a link actually needs its article
+ *  extracted, so every other input format stays independent of it —
+ *  mirrors loadMarked and loadJSZip above. */
+function loadReadability() {
+  if (!readabilityPromise) {
+    readabilityPromise = new Promise((resolve, reject) => {
+      if (window.Readability) return resolve(window.Readability);
+      const script = document.createElement("script");
+      script.src = READABILITY_URL;
+      script.onload = () => resolve(window.Readability);
+      script.onerror = () => reject(new Error("Failed to fetch Readability"));
+      document.head.appendChild(script);
+    }).catch((err) => { readabilityPromise = null; throw err; });
+  }
+  return readabilityPromise;
+}
+
+/** A freshly parsed document's own baseURI is this app's location, not the
+ *  fetched page's — sanitizeHtmlDoc resolves img/a URLs from the raw
+ *  attribute string, not the browser's resolved DOM property, so a
+ *  relative "/photo.jpg" would otherwise point at this app, not the
+ *  source site. Rewriting attributes to absolute URLs before Readability
+ *  serializes its output means sanitizeHtmlDoc needs no changes at all —
+ *  by the time it reads anything, every URL already is absolute. */
+function absolutizeUrls(doc, baseUrl) {
+  doc.querySelectorAll("img[src]").forEach((img) => {
+    try { img.setAttribute("src", new URL(img.getAttribute("src"), baseUrl).href); } catch {}
+  });
+  doc.querySelectorAll("a[href]").forEach((a) => {
+    try { a.setAttribute("href", new URL(a.getAttribute("href"), baseUrl).href); } catch {}
+  });
+}
+
+function fetchAndReadUrl(url) {
+  if (!window.AndroidTTS?.fetchUrl) {
+    toast("Reading a web page needs the Android app.");
+    return;
+  }
+  toast(`Fetching ${url}…`, 60000);
+  window.AndroidTTS.fetchUrl(url);
+}
+
+/** Called by TtsBridge.fetchUrl's native callback — see the JSDoc there
+ *  for why this has to be async rather than a return value. */
+window.onUrlFetched = async function (url, html, error) {
+  if (error) { toast(error); return; }
+  try {
+    const articleDoc = new DOMParser().parseFromString(html, "text/html");
+    absolutizeUrls(articleDoc, url);
+
+    const Readability = await loadReadability();
+    const article = new Readability(articleDoc).parse();
+    if (!article?.content || !article.textContent.trim()) {
+      toast("Couldn't find readable article content on that page.");
+      return;
+    }
+
+    const contentDoc = new DOMParser().parseFromString(article.content, "text/html");
+    // Readability drops the article's own <h1> when it duplicates the
+    // title it already detected, which is correct for display (setSource
+    // already shows it in the toolbar) but would mean the headline is
+    // simply never spoken — putting it back here is what makes a read of
+    // the article actually start with its title, the way a person would.
+    if (article.title) {
+      const h1 = contentDoc.createElement("h1");
+      h1.textContent = article.title;
+      contentDoc.body.insertBefore(h1, contentDoc.body.firstChild);
+    }
+    const tree = sanitizeHtmlDoc(contentDoc, (src) => (SAFE_IMAGE.test(src) ? src : null));
+
+    exitEpubMode();
+    app.raw = null;   // no raw/rendered toggle for a fetched page
+    app.engine?.stop();
+    app.renderer.clear();
+    app.load(null, tree);
+    setSource(article.title || url, url);
+    toast(`Loaded "${article.title || url}"`);
+  } catch (err) {
+    toast(`Couldn't read that page: ${err.message}`);
+  }
+};
+
+/** True only when the whole trimmed string is nothing but a link — a
+ *  sentence that happens to contain a URL should still be read as text,
+ *  not silently redirected into a page fetch instead of what was actually
+ *  copied or shared. */
+function looksLikeBareUrl(text) {
+  const trimmed = text.trim();
+  if (/\s/.test(trimmed)) return false;
+  try {
+    const u = new URL(trimmed);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** The entry point for Android's Share sheet (see MainActivity's
+ *  deliverPendingShare), distinct from handlePastedText: sharing a link
+ *  from another app is already an explicit, deliberate action — unlike a
+ *  clipboard that might just happen to hold a stale URL — so this fetches
+ *  it directly rather than routing through the confirm-first prompt below. */
+function handleSharedText(text) {
+  if (looksLikeBareUrl(text)) { fetchAndReadUrl(text.trim()); return; }
+  handlePastedText(text);
+}
+
 /**
  * Called from Android's MainActivity.onResume(), on every return to the
  * app — not just a cold launch, since this only ever suggests a paste
@@ -2859,9 +2978,14 @@ function checkClipboardOnResume() {
   if (!text || !text.trim()) return;
   if (text === lastClipPrompt || text === app.raw?.text) return;
 
-  pendingClip = { text, html: window.AndroidTTS.readClipboardHtml?.() || null };
-  const preview = text.trim().replace(/\s+/g, " ").slice(0, 40);
-  clipPromptText.textContent = `Paste "${preview}${text.trim().length > 40 ? "…" : ""}"?`;
+  const isUrl = looksLikeBareUrl(text);
+  pendingClip = { text, html: isUrl ? null : (window.AndroidTTS.readClipboardHtml?.() || null), isUrl };
+  if (isUrl) {
+    clipPromptText.textContent = `Fetch and read ${text.trim()}?`;
+  } else {
+    const preview = text.trim().replace(/\s+/g, " ").slice(0, 40);
+    clipPromptText.textContent = `Paste "${preview}${text.trim().length > 40 ? "…" : ""}"?`;
+  }
   clipPrompt.classList.remove("hidden");
 }
 
@@ -2869,7 +2993,10 @@ function dismissClipPrompt(accept) {
   clipPrompt.classList.add("hidden");
   if (!pendingClip) return;
   lastClipPrompt = pendingClip.text;
-  if (accept) handlePastedText(pendingClip.text, pendingClip.html);
+  if (accept) {
+    if (pendingClip.isUrl) fetchAndReadUrl(pendingClip.text.trim());
+    else handlePastedText(pendingClip.text, pendingClip.html);
+  }
   pendingClip = null;
 }
 

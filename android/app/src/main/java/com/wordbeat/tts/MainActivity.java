@@ -210,9 +210,12 @@ public class MainActivity extends Activity {
     /**
      * A share from another app's own Share button — as opposed to a
      * copy/paste — arrives as an ACTION_SEND intent carrying one plain-text
-     * string. Handed to the same handlePastedText the paste path already
-     * uses, so it gets the identical Markdown/table detection rather than a
-     * separate, parallel code path to keep in sync.
+     * string. Handed to handleSharedText, not handlePastedText directly:
+     * sharing a bare web link (the common case from a browser's Share
+     * sheet) should fetch and read that page, not read the URL string
+     * aloud as text — handleSharedText tells the two apart and only falls
+     * through to the identical Markdown/table detection paste already uses
+     * when it isn't a link.
      */
     private void handleIncomingIntent(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
@@ -229,7 +232,7 @@ public class MainActivity extends Activity {
         // JSONObject.quote wraps the string as a JSON string literal —
         // already valid JS syntax, and unlike hand-rolled escaping it
         // handles quotes, backslashes, and newlines correctly.
-        web.evaluateJavascript("handlePastedText(" + JSONObject.quote(text) + ")", null);
+        web.evaluateJavascript("handleSharedText(" + JSONObject.quote(text) + ")", null);
     }
 
     @Override
