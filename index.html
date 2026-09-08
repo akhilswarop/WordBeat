@@ -709,6 +709,49 @@ function tokenAtChar(tokens, charPos) {
  * what keeps highlighting aligned across the whole document.
  * ------------------------------------------------------------------ */
 
+// Matches one emoji as a whole unit — a bare pictographic glyph, a
+// variation-selected symbol like the arrow "➡️" one reader
+// specifically complained about, a ZWJ-joined sequence (a family, a
+// profession with a skin tone), a two-codepoint flag, a keycap sequence
+// like "3️⃣", or a standalone skin-tone modifier. A keycap's base
+// (a digit, #, or *) is only ever matched *together with* the combining
+// keycap character that follows it, never alone — "\p{Emoji_Component}"
+// alone would also match plain ASCII digits and #/*, which would blank
+// ordinary numbers out of real prose if used as a standalone alternative.
+// Built via String.fromCharCode + new RegExp, not typed as ️/‍/⃣
+// literals in a regex, because those specific 4-hex-digit escapes (unlike
+// the \u{...} brace-form ranges below) silently decode to the literal
+// invisible characters themselves when typed directly — the same pitfall
+// documented for SOFT_HYPHEN elsewhere in this file, and just as hard to
+// spot here: an invisible character sitting in the source looks identical
+// to a correctly-escaped one until something like this breaks.
+const VS16 = String.fromCharCode(0xfe0f); // variation selector-16 (emoji presentation)
+const ZWJ = String.fromCharCode(0x200d); // zero width joiner
+const KEYCAP = String.fromCharCode(0x20e3); // combining enclosing keycap
+const EMOJI_UNIT =
+  "(?:\\p{Extended_Pictographic}" + VS16 + "?|[\\u{1F1E6}-\\u{1F1FF}]{2}|[0-9#*]" + VS16 + "?" + KEYCAP + ")";
+const EMOJI_RE = new RegExp(
+  EMOJI_UNIT + "(?:" + ZWJ + EMOJI_UNIT + ")*" + "|[\\u{1F3FB}-\\u{1F3FF}]",
+  "gu"
+);
+
+/** Speech engines that try to be helpful often narrate an emoji by its
+ *  Unicode name ("right pointing arrow", "loudly crying face") instead of
+ *  just skipping it — exactly the reported complaint. Blanked to spaces of
+ *  the *same length*, not removed: every downstream consumer of chunk
+ *  text (onRangeStart/onBoundary offsets, the mid-chunk resume slicing in
+ *  both engines) assumes chunk.text is a same-length, same-position slice
+ *  of the source at chunk.charOffset — deleting characters here would
+ *  shift every offset after the emoji and desync the highlight from the
+ *  audio for the rest of the chunk. The word stays visible on screen
+ *  either way, since tokenizing (WORD_RE, above) never matched emoji as a
+ *  word in the first place — only what actually reaches the speech engine
+ *  changes here.
+ */
+function blankEmoji(text) {
+  return text.replace(EMOJI_RE, (m) => " ".repeat(m.length));
+}
+
 function chunkText(text, maxLen = 220) {
   // Sentence-ish: run of non-terminators, terminators, optional closers.
   const SENTENCE_RE = /[^.!?\n]*(?:[.!?]+['")\]”’]*|\n+|$)/gy;
@@ -754,7 +797,15 @@ function chunkText(text, maxLen = 220) {
     }
   }
   if (buffer.trim()) chunks.push({ text: buffer, charOffset: bufferStart });
-  return chunks.filter(c => c.text.trim().length > 0);
+  // Blanked after filtering so the emptiness check above still sees any
+  // real, non-emoji content in a chunk; a chunk that turns out to be
+  // nothing but emoji still passes through, blanked to silence for that
+  // stretch, rather than trying to special-case dropping it — chunks are
+  // assumed elsewhere to tile the source contiguously by charOffset, and
+  // removing one instead of blanking it would break that.
+  return chunks
+    .filter(c => c.text.trim().length > 0)
+    .map(c => ({ ...c, text: blankEmoji(c.text) }));
 }
 
 /* ------------------------------------------------------------------ *
