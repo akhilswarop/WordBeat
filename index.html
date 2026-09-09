@@ -710,14 +710,22 @@ function tokenAtChar(tokens, charPos) {
  * ------------------------------------------------------------------ */
 
 // Matches one emoji as a whole unit — a bare pictographic glyph, a
-// variation-selected symbol like the arrow "➡️" one reader
-// specifically complained about, a ZWJ-joined sequence (a family, a
-// profession with a skin tone), a two-codepoint flag, a keycap sequence
-// like "3️⃣", or a standalone skin-tone modifier. A keycap's base
-// (a digit, #, or *) is only ever matched *together with* the combining
-// keycap character that follows it, never alone — "\p{Emoji_Component}"
-// alone would also match plain ASCII digits and #/*, which would blank
-// ordinary numbers out of real prose if used as a standalone alternative.
+// variation-selected symbol like the emoji arrow "➡️" one reader
+// first complained about, a ZWJ-joined sequence (a family, a profession
+// with a skin tone), a two-codepoint flag, a keycap sequence like
+// "3️⃣", or a standalone skin-tone modifier. A keycap's base (a digit,
+// #, or *) is only ever matched *together with* the combining keycap
+// character that follows it, never alone — "\p{Emoji_Component}" alone
+// would also match plain ASCII digits and #/*, which would blank ordinary
+// numbers out of real prose if used as a standalone alternative.
+//
+// Also matches a *plain* Unicode arrow (U+2190-U+21FF) — a second,
+// distinct complaint about the same underlying problem: a flowchart
+// written with "↓" between steps is completely ordinary plain-text
+// notation, not emoji at all, so \p{Extended_Pictographic} alone never
+// caught it, but speech engines narrate it the exact same unwanted way
+// ("downwards arrow").
+//
 // Built via String.fromCharCode + new RegExp, not typed as ️/‍/⃣
 // literals in a regex, because those specific 4-hex-digit escapes (unlike
 // the \u{...} brace-form ranges below) silently decode to the literal
@@ -725,13 +733,17 @@ function tokenAtChar(tokens, charPos) {
 // documented for SOFT_HYPHEN elsewhere in this file, and just as hard to
 // spot here: an invisible character sitting in the source looks identical
 // to a correctly-escaped one until something like this breaks.
+const VS15 = String.fromCharCode(0xfe0e); // variation selector-15 (text presentation)
 const VS16 = String.fromCharCode(0xfe0f); // variation selector-16 (emoji presentation)
 const ZWJ = String.fromCharCode(0x200d); // zero width joiner
 const KEYCAP = String.fromCharCode(0x20e3); // combining enclosing keycap
+const VS = "(?:" + VS15 + "|" + VS16 + ")";
 const EMOJI_UNIT =
   "(?:\\p{Extended_Pictographic}" + VS16 + "?|[\\u{1F1E6}-\\u{1F1FF}]{2}|[0-9#*]" + VS16 + "?" + KEYCAP + ")";
 const EMOJI_RE = new RegExp(
-  EMOJI_UNIT + "(?:" + ZWJ + EMOJI_UNIT + ")*" + "|[\\u{1F3FB}-\\u{1F3FF}]",
+  EMOJI_UNIT + "(?:" + ZWJ + EMOJI_UNIT + ")*" +
+    "|[\\u{1F3FB}-\\u{1F3FF}]" +
+    "|[\\u2190-\\u21FF]" + VS + "?",
   "gu"
 );
 
