@@ -1086,7 +1086,15 @@ function continueSplitOrderedLists(root) {
 
 async function markdownToDom(src) {
   const marked = await loadMarked();
-  const html = marked.parse(String(src), { gfm: true, breaks: false });
+  // breaks:true turns a single source newline into a real <br> instead of
+  // CommonMark's "join into one paragraph" rule. Content this app actually
+  // receives as Markdown is overwhelmingly chat/AI output (ChatGPT-style
+  // flowcharts, step lists) where every line break is intentional — not
+  // hand-wrapped prose where mid-paragraph newlines are incidental. Without
+  // this, a pasted "Step 1\n↓\nStep 2\n↓\nStep 3" flowchart collapses
+  // into one unbroken run-on paragraph instead of the separate visual/
+  // spoken steps the source clearly intended.
+  const html = marked.parse(String(src), { gfm: true, breaks: true });
   const doc = new DOMParser().parseFromString(html, "text/html");
   const sanitized = sanitizeHtmlDoc(doc, (imgSrc) => (SAFE_IMAGE.test(imgSrc) ? imgSrc : null));
   return continueSplitOrderedLists(sanitized);
@@ -1200,6 +1208,19 @@ function buildFromDom(root) {
     if (node.nodeType !== Node.ELEMENT_NODE) return;
 
     if (UNSPOKEN_TAGS.has(node.tagName)) { endBlock(); return; }
+
+    // A <br> (now emitted by marked's breaks:true for a single source
+    // newline — see markdownToDom) stays in the live DOM untouched, so the
+    // browser already renders the visual line break on its own; this only
+    // has to stop the *spoken* text from gluing the words on either side
+    // together ("civilliberties"). A bare \n, not the \n\n endBlock() uses,
+    // is deliberate: chunkText's SENTENCE_RE treats any run of \n as a
+    // chunk boundary either way, so this still gets a natural pause without
+    // claiming the stronger "new paragraph" semantics \n\n carries elsewhere.
+    if (node.tagName === "BR") {
+      if (spoken && !spoken.endsWith("\n")) spoken += "\n";
+      return;
+    }
 
     for (const kid of [...node.childNodes]) walk(kid);
 
