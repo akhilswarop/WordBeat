@@ -2103,7 +2103,9 @@ const app = {
     text = this.text;
     if (app.engine) {
       pendingAutoLang = detectScriptLang(text);
-      if (pendingAutoLang && autoSelectVoiceForLanguage?.(pendingAutoLang)) pendingAutoLang = null;
+      const _applied = pendingAutoLang && autoSelectVoiceForLanguage?.(pendingAutoLang);
+      if (window.__DEBUG_LANG) toast(`detect=${pendingAutoLang} applied=${_applied}`, 8000);
+      if (_applied) pendingAutoLang = null;
     }
     this.chunks = chunkText(text);
     this.tokensByChunk = this.chunks.map(c => {
@@ -2561,13 +2563,18 @@ if (!Engine) {
      *  set userPickedVoiceName, so it stays freely re-evaluated on every
      *  new document. */
     const androidAutoSelectVoice = (langPrefix) => {
-      if (userPickedVoiceName) return false;
+      if (userPickedVoiceName) {
+        if (window.__DEBUG_LANG) toast(`auto-select skipped: manual pick=${userPickedVoiceName}`, 8000);
+        return false;
+      }
       const voices = app.engine.listVoices();
       const match = voices.find(v => !v.network && v.locale.toLowerCase().startsWith(langPrefix))
         || voices.find(v => v.locale.toLowerCase().startsWith(langPrefix));
+      if (window.__DEBUG_LANG) toast(`voices=${voices.length} match=${match?.name}/${match?.locale}`, 8000);
       if (!match) return false;
       el.voice.value = match.name;
       app.engine.setVoiceByName(match.name);
+      renderVoicePanelRows();
       return true;
     };
     autoSelectVoiceForLanguage = androidAutoSelectVoice;
@@ -2619,6 +2626,11 @@ if (!Engine) {
       if (idx < 0) return false;
       el.voice.value = idx;
       app.engine.voice = voices[idx];
+      // Assigning .value directly doesn't fire a 'change' event the way a
+      // real click does, so the trigger/panel would otherwise keep showing
+      // the previous selection even though the engine already switched —
+      // exactly the gap the on-device stress test caught.
+      renderVoicePanelRows();
       return true;
     };
     autoSelectVoiceForLanguage = desktopAutoSelectVoice;
