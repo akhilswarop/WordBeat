@@ -143,6 +143,7 @@ public class TtsBridge {
                 o.put("name", v.getName());
                 o.put("locale", v.getLocale().toString());
                 o.put("network", v.isNetworkConnectionRequired());
+                o.put("quality", v.getQuality());
                 out.put(o);
             }
         } catch (Exception ignored) {

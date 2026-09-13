@@ -1954,6 +1954,10 @@ const app = {
     }
 
     text = this.text;
+    if (app.engine) {
+      pendingAutoLang = detectScriptLang(text);
+      if (pendingAutoLang && autoSelectVoiceForLanguage?.(pendingAutoLang)) pendingAutoLang = null;
+    }
     this.chunks = chunkText(text);
     this.tokensByChunk = this.chunks.map(c => {
       const lo = c.charOffset, hi = c.charOffset + c.text.length;
@@ -2037,6 +2041,84 @@ function togglePlayback() {
   else if (s === "paused") app.engine.resume();
   else app.engine.speak(app.chunks, { startIndex: 0, tokensByChunk: app.tokensByChunk });
 }
+
+/* ---- language detection ---- */
+
+// Unicode-range script buckets, checked with plain code-point comparisons —
+// no library, no network, consistent with this app being offline-first
+// elsewhere. Han/kana are counted separately but merged before the
+// dominance check: Japanese text mixes kanji (Han) with kana, so scoring
+// them as independent buckets would misclassify Japanese as Chinese
+// whenever kanji outnumbers kana, which is common.
+const SCRIPT_RANGES = [
+  { lang: "hi", lo: 0x0900, hi: 0x097F },  // Devanagari
+  { lang: "bn", lo: 0x0980, hi: 0x09FF },  // Bengali
+  { lang: "pa", lo: 0x0A00, hi: 0x0A7F },  // Gurmukhi
+  { lang: "gu", lo: 0x0A80, hi: 0x0AFF },  // Gujarati
+  { lang: "ta", lo: 0x0B80, hi: 0x0BFF },  // Tamil
+  { lang: "te", lo: 0x0C00, hi: 0x0C7F },  // Telugu
+  { lang: "kn", lo: 0x0C80, hi: 0x0CFF },  // Kannada
+  { lang: "ml", lo: 0x0D00, hi: 0x0D7F },  // Malayalam
+  { lang: "si", lo: 0x0D80, hi: 0x0DFF },  // Sinhala
+  { lang: "th", lo: 0x0E00, hi: 0x0E7F },  // Thai
+  { lang: "he", lo: 0x0590, hi: 0x05FF },  // Hebrew
+  { lang: "ar", lo: 0x0600, hi: 0x06FF },  // Arabic
+  { lang: "ru", lo: 0x0400, hi: 0x04FF },  // Cyrillic
+  { lang: "el", lo: 0x0370, hi: 0x03FF },  // Greek
+  { lang: "ko", lo: 0xAC00, hi: 0xD7AF },  // Hangul
+];
+const HAN_RANGE = { lo: 0x4E00, hi: 0x9FFF };
+const KANA_RANGE = { lo: 0x3040, hi: 0x30FF };
+
+/** Samples the first 2000 chars of `text`, tallies letters by script, and
+ *  returns a BCP-47-ish language prefix (e.g. "hi") when one script clearly
+ *  dominates, else null (includes: Latin-dominant, no clear majority, or
+ *  too little classifiable text to judge). Used to auto-pick a matching
+ *  voice once per document — see the call in app.load(). */
+function detectScriptLang(text) {
+  const sample = text.slice(0, 2000);
+  const counts = Object.create(null);
+  let latin = 0, han = 0, kana = 0, total = 0;
+
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i);
+    if (c >= 0x41 && c <= 0x5A || c >= 0x61 && c <= 0x7A) { latin++; total++; continue; }
+    if (c >= HAN_RANGE.lo && c <= HAN_RANGE.hi) { han++; total++; continue; }
+    if (c >= KANA_RANGE.lo && c <= KANA_RANGE.hi) { kana++; total++; continue; }
+    for (const r of SCRIPT_RANGES) {
+      if (c >= r.lo && c <= r.hi) {
+        counts[r.lang] = (counts[r.lang] || 0) + 1;
+        total++;
+        break;
+      }
+    }
+  }
+
+  if (total < 40) return null;
+
+  // Han+kana compete as one merged bucket against every other script.
+  const hanKana = han + kana;
+  let bestLang = "latin", bestCount = latin;
+  if (hanKana > bestCount) { bestLang = "hankana"; bestCount = hanKana; }
+  for (const lang in counts) {
+    if (counts[lang] > bestCount) { bestLang = lang; bestCount = counts[lang]; }
+  }
+
+  if (bestLang === "latin") return null;
+  if (bestCount / total <= 0.4) return null;
+  if (bestLang === "hankana") return kana > 0 ? "ja" : "zh";
+  return bestLang;
+}
+
+// Set by whichever engine branch initializes below (Android vs desktop);
+// dispatches an auto-detected language to that engine's own voice-matching
+// logic without either branch needing to know the other exists.
+let autoSelectVoiceForLanguage = null;
+// The most recently detected language still waiting for a matching voice —
+// cleared once applied. Needed because voice lists populate asynchronously
+// (Android's onReady, desktop's voiceschanged), so a document can finish
+// loading before any voices are available to search.
+let pendingAutoLang = null;
 
 /* ---- voice list organisation ---- */
 
@@ -2167,18 +2249,62 @@ if (!Engine) {
     // asking for voices before that returns nothing.
     let userPickedVoiceName = null;
 
+    // Android voices carry no human name (Voice.getName() is an opaque,
+    // engine-specific ID, not reliably parseable) — quality is the one
+    // standardized, reliable distinguishing field the platform gives us.
+    // langDisplayName() (defined above, already used for optgroup headers)
+    // supplies the language part: a native <select> only shows the
+    // *selected option's* text once collapsed, not the optgroup label above
+    // it, so the language has to live in the option label itself or a
+    // closed dropdown would show only "High quality" with no language at
+    // all — worse than today's bare locale.
+    const ANDROID_QUALITY_LABELS = {
+      500: "Very high quality", 400: "High quality", 300: "Standard quality",
+      200: "Low quality", 100: "Very low quality",
+    };
+    const androidQualityLabel = (q) => ANDROID_QUALITY_LABELS[q] || "Standard quality";
+
     const fillAndroidVoices = () => {
       const voices = app.engine.listVoices();
       if (!voices.length) return;
-      renderGroupedVoices(el.voice, voices.map((v) => ({
-        value: v.name, label: `${v.locale}${v.network ? " (network)" : ""}`, lang: v.locale, local: !v.network,
-      })));
+      renderGroupedVoices(el.voice, voices.map((v) => {
+        // Java's Locale.toString() is underscore-separated ("en_AU"), not
+        // the hyphenated BCP-47 form ("en-AU") Intl.DisplayNames expects —
+        // normalize or its .of() call falls back to the raw ugly tag.
+        const tag = v.locale.replace(/_/g, "-");
+        return {
+          value: v.name,
+          label: `${langDisplayName(tag)} · ${androidQualityLabel(v.quality)}${v.network ? " (network)" : ""}`,
+          lang: tag, local: !v.network,
+        };
+      }));
 
       let chosen = userPickedVoiceName && voices.find(v => v.name === userPickedVoiceName);
       if (!chosen) chosen = voices.find(v => !v.network && /^en/i.test(v.locale)) || voices[0];
       el.voice.value = chosen.name;
       app.engine.setVoiceByName(chosen.name);
+
+      if (pendingAutoLang && androidAutoSelectVoice(pendingAutoLang)) pendingAutoLang = null;
     };
+
+    /** Auto-picks a voice matching `langPrefix` for the document that just
+     *  loaded. No-ops if the user has manually chosen a voice — an
+     *  auto-pick must never fight a real choice (same rule as the
+     *  voiceschanged-reversion fix above: userPickedVoiceName, once set,
+     *  is never silently overridden). Unlike a manual pick, this doesn't
+     *  set userPickedVoiceName, so it stays freely re-evaluated on every
+     *  new document. */
+    const androidAutoSelectVoice = (langPrefix) => {
+      if (userPickedVoiceName) return false;
+      const voices = app.engine.listVoices();
+      const match = voices.find(v => !v.network && v.locale.toLowerCase().startsWith(langPrefix))
+        || voices.find(v => v.locale.toLowerCase().startsWith(langPrefix));
+      if (!match) return false;
+      el.voice.value = match.name;
+      app.engine.setVoiceByName(match.name);
+      return true;
+    };
+    autoSelectVoiceForLanguage = androidAutoSelectVoice;
 
     app.engine.onReady = fillAndroidVoices;
     if (window.AndroidTTS.isReady()) fillAndroidVoices();
@@ -2211,7 +2337,23 @@ if (!Engine) {
       if (index < 0) index = voices.findIndex(v => v.localService && /^en/i.test(v.lang));
       el.voice.value = index >= 0 ? index : 0;
       app.engine.voice = voices[el.voice.value];
+
+      if (pendingAutoLang && desktopAutoSelectVoice(pendingAutoLang)) pendingAutoLang = null;
     };
+
+    /** Desktop counterpart to androidAutoSelectVoice above — same
+     *  never-override-a-manual-pick rule, same non-sticky auto-pick. */
+    const desktopAutoSelectVoice = (langPrefix) => {
+      if (userPickedVoice) return false;
+      const voices = speechSynthesis.getVoices();
+      let idx = voices.findIndex(v => v.localService && v.lang.toLowerCase().startsWith(langPrefix));
+      if (idx < 0) idx = voices.findIndex(v => v.lang.toLowerCase().startsWith(langPrefix));
+      if (idx < 0) return false;
+      el.voice.value = idx;
+      app.engine.voice = voices[idx];
+      return true;
+    };
+    autoSelectVoiceForLanguage = desktopAutoSelectVoice;
 
     loadVoices();
     speechSynthesis.addEventListener("voiceschanged", loadVoices);
