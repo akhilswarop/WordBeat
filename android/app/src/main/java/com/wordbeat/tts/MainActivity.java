@@ -178,8 +178,26 @@ public class MainActivity extends Activity {
                 if (pendingFileChoice != null) pendingFileChoice.onReceiveValue(null);
                 pendingFileChoice = callback;
 
+                // Not params.createIntent(): its default implementation sets
+                // the intent's single `type` to the first accept-types entry
+                // verbatim (here, "text/plain") rather than the wildcard
+                // "*/*" whenever there's more than one type — observed live
+                // via `dumpsys activity activities` on a real device. Some
+                // document-provider pickers use that concrete `type` to
+                // narrow matching beyond EXTRA_MIME_TYPES, which silently
+                // disabled markdown files even though EXTRA_MIME_TYPES
+                // already listed their MIME type correctly. Building the
+                // intent ourselves keeps EXTRA_MIME_TYPES but forces the
+                // wildcard type, which fixed it in on-device testing.
+                android.util.Log.d("WordBeat", "file chooser accept types: "
+                        + java.util.Arrays.toString(params.getAcceptTypes()));
+                Intent chooserIntent = new Intent(Intent.ACTION_GET_CONTENT);
+                chooserIntent.addCategory(Intent.CATEGORY_OPENABLE);
+                chooserIntent.setType("*/*");
+                chooserIntent.putExtra(Intent.EXTRA_MIME_TYPES, params.getAcceptTypes());
+
                 try {
-                    startActivityForResult(params.createIntent(), FILE_CHOOSER_REQUEST);
+                    startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST);
                 } catch (ActivityNotFoundException e) {
                     pendingFileChoice = null;
                     return false;
