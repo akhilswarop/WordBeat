@@ -138,7 +138,7 @@
   #tools { display: flex; align-items: center; gap: 4px; min-width: 0; }
   #btnMore { display: none; }
 
-  select#voice, select#chapterSelect {
+  select#chapterSelect, .voice-trigger {
     font: inherit; font-size: 12px;
     color: var(--text); background: var(--chip);
     border: 1px solid var(--line); border-radius: 9px;
@@ -153,10 +153,83 @@
     background-repeat: no-repeat;
     background-position: right 8px center;
   }
-  select#voice:hover, select#chapterSelect:hover { border-color: var(--accent); }
-  select#voice:focus-visible, select#chapterSelect:focus-visible {
+  select#chapterSelect:hover, .voice-trigger:hover { border-color: var(--accent); }
+  select#chapterSelect:focus-visible, .voice-trigger:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent);
   }
+
+  /* Present but invisible/unreachable by anything except this page's own
+     JS: keeps every existing selection/grouping/auto-detect code path
+     (which all reads and writes this element) working completely
+     unchanged, underneath the custom-styled voice-picker built on top of
+     it. Not display:none — some engines stop firing change events or
+     treating a display:none <select> as interactive. */
+  .sr-only-select {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+
+  /* ---- custom voice picker ----
+     Replaces select#voice's native popup, which neither browsers nor
+     Android's WebView allow any CSS into once opened — it always renders
+     as the platform's own plain list dialog, mismatched with the rest of
+     the app's dark theme, and (on Android specifically) wraps long labels
+     with the selection indicator left stranded on the first line. This is
+     a normal absolutely-positioned panel instead, styled like the app's
+     existing popover patterns (#tools, #clipPrompt). */
+  .voice-picker { position: relative; }
+  .voice-trigger {
+    display: flex; align-items: center; text-align: left;
+    max-width: 200px;
+  }
+  .voice-trigger span {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .voice-panel {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 45;
+    width: min(360px, 92vw);
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--shadow-lg);
+    padding: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .voice-search {
+    font: inherit; font-size: 13px;
+    color: var(--text); background: var(--chip);
+    border: 1px solid var(--line); border-radius: 9px;
+    padding: 8px 10px; width: 100%;
+  }
+  .voice-search:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+  }
+  .voice-list { max-height: min(50vh, 420px); overflow-y: auto; }
+  .voice-group {
+    font-size: 11px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 8px 4px;
+  }
+  .voice-list > .voice-group:first-child { padding-top: 4px; }
+  .voice-row {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; text-align: left; font: inherit; font-size: 13px; color: var(--text);
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    padding: 8px; border-radius: 8px;
+    /* align-items: center on the row (not the text) is what keeps the
+       selection dot vertically centred against a label that wraps to two
+       lines — the exact misalignment the native OS picker has no fix for. */
+  }
+  .voice-row:hover { background: var(--chip); }
+  .voice-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .voice-row-dot {
+    flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%;
+    border: 1.5px solid var(--muted); box-sizing: border-box;
+  }
+  .voice-row[aria-selected="true"] .voice-row-dot {
+    border-color: var(--accent); background: var(--accent);
+  }
+  .voice-row[aria-selected="true"] { color: var(--accent); }
+  .voice-row-label { flex: 1; min-width: 0; }
+  .voice-empty { padding: 14px 8px; color: var(--muted); font-size: 13px; text-align: center; }
 
   /* ----------------------------- paper ----------------------------- */
 
@@ -526,8 +599,11 @@
       font-size: 13.5px; font-weight: 500; color: var(--text);
     }
     #tools .ic[aria-pressed="true"]::after { color: var(--accent); }
-    #tools select#voice, #tools select#chapterSelect {
-      width: 100%; max-width: none; height: 40px; margin-top: 2px;
+    #tools select#chapterSelect, #tools .voice-picker {
+      width: 100%; max-width: none; margin-top: 2px;
+    }
+    #tools .voice-trigger {
+      width: 100%; max-width: none; height: 40px;
     }
   }
 
@@ -596,7 +672,25 @@
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
       </button>
       <select id="chapterSelect" class="hidden" title="Chapter" aria-label="Chapter"></select>
-      <select id="voice" title="Voice" aria-label="Voice"></select>
+      <!-- The <select> stays the real state: every existing behavior (voice
+           grouping, manual-pick tracking, auto-language-detect, the
+           anti-reversion rule) reads/writes it exactly as before. It's
+           visually hidden, not display:none (which some engines treat as
+           "not focusable/functional") — just moved off-screen — while
+           #voicePicker below is a fully custom-styled trigger + panel that
+           mirrors its contents. Neither browsers nor Android's WebView give
+           any CSS control over a native <select>'s OPEN popup, which is why
+           this exists instead of styling the select directly. -->
+      <select id="voice" class="sr-only-select" title="Voice" aria-label="Voice"></select>
+      <div class="voice-picker" id="voicePicker">
+        <button type="button" class="voice-trigger" id="voiceTrigger" aria-haspopup="listbox" aria-expanded="false">
+          <span id="voiceTriggerLabel">Voice</span>
+        </button>
+        <div class="voice-panel hidden" id="voicePanel" role="listbox" aria-label="Voice">
+          <input type="text" class="voice-search" id="voiceSearch" placeholder="Search voices…" autocomplete="off">
+          <div class="voice-list" id="voiceList"></div>
+        </div>
+      </div>
     </div>
 
     <button class="ic" id="btnMore" title="More controls" aria-label="More controls" aria-expanded="false">
@@ -1880,6 +1974,12 @@ const el = {
   stop: document.getElementById("btnStop"),
   edit: document.getElementById("btnEdit"),
   voice: document.getElementById("voice"),
+  voicePicker: document.getElementById("voicePicker"),
+  voiceTrigger: document.getElementById("voiceTrigger"),
+  voiceTriggerLabel: document.getElementById("voiceTriggerLabel"),
+  voicePanel: document.getElementById("voicePanel"),
+  voiceSearch: document.getElementById("voiceSearch"),
+  voiceList: document.getElementById("voiceList"),
   chapterSelect: document.getElementById("chapterSelect"),
   rate: document.getElementById("rate"),
   rateVal: document.getElementById("rateVal"),
@@ -2218,6 +2318,116 @@ function renderGroupedVoices(selectEl, items) {
   selectEl.replaceChildren(...nodes);
 }
 
+/* ---- custom voice picker (mirrors el.voice, which stays the real state) ---- */
+
+/** Rebuilds #voiceList from el.voice's current <optgroup>/<option>
+ *  structure — called right after every renderGroupedVoices(el.voice, ...)
+ *  call, so it always reflects the freshest grouping/sorting/labels
+ *  without duplicating any of that logic here. */
+function renderVoicePanelRows() {
+  el.voiceList.replaceChildren();
+  const children = [...el.voice.children];
+
+  if (!children.length) {
+    const empty = document.createElement("div");
+    empty.className = "voice-empty";
+    empty.textContent = "No voices available";
+    el.voiceList.append(empty);
+    updateVoiceTrigger();
+    return;
+  }
+
+  const makeRow = (opt) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "voice-row";
+    row.setAttribute("role", "option");
+    row.dataset.value = opt.value;
+    const dot = document.createElement("span");
+    dot.className = "voice-row-dot";
+    const label = document.createElement("span");
+    label.className = "voice-row-label";
+    label.textContent = opt.textContent;
+    row.append(dot, label);
+    row.addEventListener("click", () => {
+      el.voice.value = opt.value;
+      el.voice.dispatchEvent(new Event("change"));
+      closeVoicePanel();
+    });
+    return row;
+  };
+
+  for (const child of children) {
+    if (child.tagName === "OPTGROUP") {
+      const header = document.createElement("div");
+      header.className = "voice-group";
+      header.textContent = child.label;
+      el.voiceList.append(header);
+      for (const opt of child.children) el.voiceList.append(makeRow(opt));
+    } else {
+      el.voiceList.append(makeRow(child));
+    }
+  }
+  updateVoiceTrigger();
+}
+
+/** Syncs the trigger button's text and the panel's selected-row marker to
+ *  el.voice's current value — cheap enough to call on every selection
+ *  change (manual click, auto-detect, the default-voice heuristic)
+ *  without rebuilding the row list itself. */
+function updateVoiceTrigger() {
+  const selected = el.voice.selectedOptions[0];
+  el.voiceTriggerLabel.textContent = selected ? selected.textContent : "Voice";
+  for (const row of el.voiceList.querySelectorAll(".voice-row")) {
+    row.setAttribute("aria-selected", String(row.dataset.value === el.voice.value));
+  }
+}
+
+function openVoicePanel() {
+  el.voicePanel.classList.remove("hidden");
+  el.voiceTrigger.setAttribute("aria-expanded", "true");
+  el.voiceSearch.value = "";
+  filterVoiceRows("");
+  el.voiceSearch.focus();
+}
+
+function closeVoicePanel() {
+  el.voicePanel.classList.add("hidden");
+  el.voiceTrigger.setAttribute("aria-expanded", "false");
+}
+
+/** Hides non-matching rows and, per group, hides the group header too when
+ *  nothing under it matches — a plain substring filter, since this list can
+ *  run into the hundreds of entries on a device with many voice packs. */
+function filterVoiceRows(query) {
+  const q = query.trim().toLowerCase();
+  let lastGroup = null, groupHasVisible = false;
+  for (const node of el.voiceList.children) {
+    if (node.classList.contains("voice-group")) {
+      if (lastGroup) lastGroup.style.display = groupHasVisible ? "" : "none";
+      lastGroup = node;
+      groupHasVisible = false;
+      continue;
+    }
+    const match = !q || node.textContent.toLowerCase().includes(q);
+    node.style.display = match ? "" : "none";
+    if (match) groupHasVisible = true;
+  }
+  if (lastGroup) lastGroup.style.display = groupHasVisible ? "" : "none";
+}
+
+el.voiceTrigger.addEventListener("click", () => {
+  if (el.voicePanel.classList.contains("hidden")) openVoicePanel();
+  else closeVoicePanel();
+});
+document.addEventListener("click", (e) => {
+  if (!el.voicePicker.contains(e.target)) closeVoicePanel();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeVoicePanel();
+});
+el.voiceSearch.addEventListener("input", () => filterVoiceRows(el.voiceSearch.value));
+
 /* Prefer the native engine when running inside the Android app, since the
    WebView has no Web Speech API at all. Everything downstream is identical:
    both classes are producers of the same timing track. */
@@ -2285,6 +2495,7 @@ if (!Engine) {
       app.engine.setVoiceByName(chosen.name);
 
       if (pendingAutoLang && androidAutoSelectVoice(pendingAutoLang)) pendingAutoLang = null;
+      renderVoicePanelRows();
     };
 
     /** Auto-picks a voice matching `langPrefix` for the document that just
@@ -2312,6 +2523,7 @@ if (!Engine) {
     el.voice.addEventListener("change", () => {
       app.engine.setVoiceByName(el.voice.value);
       userPickedVoiceName = el.voice.value;
+      updateVoiceTrigger();
     });
   } else {
     // Voices populate asynchronously — the first getVoices() call returns [].
@@ -2339,6 +2551,7 @@ if (!Engine) {
       app.engine.voice = voices[el.voice.value];
 
       if (pendingAutoLang && desktopAutoSelectVoice(pendingAutoLang)) pendingAutoLang = null;
+      renderVoicePanelRows();
     };
 
     /** Desktop counterpart to androidAutoSelectVoice above — same
@@ -2362,6 +2575,7 @@ if (!Engine) {
       const v = speechSynthesis.getVoices()[el.voice.value];
       app.engine.voice = v;
       userPickedVoice = v ? { name: v.name, lang: v.lang } : null;
+      updateVoiceTrigger();
     });
   }
 
@@ -3374,7 +3588,13 @@ btnMore.addEventListener("click", (e) => {
 });
 
 // Any action inside the sheet closes it, so the reader is not left covered.
+// #voiceTrigger is the one exception: it's a <button> too, but its job is
+// to open the voice panel *on top of* the sheet, not act immediately — the
+// old select#voice never had this problem since choosing from a native
+// picker isn't a "click" on a button in the DOM sense. A row click inside
+// the voice panel is still a real action, so it closes both as intended.
 tools.addEventListener("click", (e) => {
+  if (e.target.closest("#voiceTrigger")) return;
   if (e.target.closest("button")) closeTools();
 });
 document.addEventListener("click", (e) => {
