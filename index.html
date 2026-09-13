@@ -617,20 +617,24 @@
       width: 100%; max-width: none; height: 40px; margin-top: 2px;
     }
 
-    /* Full-screen instead of anchored below the trigger: the trigger sits
-       at the bottom of the (already-closing, see openVoicePanel) overflow
-       sheet, so a small popover dropped below it would land far down the
-       screen, overlapping the reading area and player bar rather than
-       reading as connected to what opened it — worse than the native
-       picker it replaced. Full-screen also gives this list the room it
-       actually needs: some devices report hundreds of voices. */
+    /* Nearly full-screen instead of anchored below the trigger: the
+       trigger sits at the bottom of the (already-closing, see
+       openVoicePanel) overflow sheet, so a small popover dropped below it
+       would land far down the screen, overlapping the reading area and
+       player bar rather than reading as connected to what opened it —
+       worse than the native picker it replaced. Stops short of the
+       player bar rather than running full-bleed behind it (150px clears
+       it the same way #toast's own bottom offset does), and keeps the
+       rounded-card look of the app's other popovers instead of going
+       edge-to-edge. */
     .voice-panel {
-      position: fixed; inset: 0; z-index: 50;
-      top: var(--safe-top); bottom: var(--safe-bottom);
-      left: var(--safe-left); right: var(--safe-right);
+      position: fixed; z-index: 50;
+      top: calc(var(--safe-top) + 54px);
+      bottom: calc(150px + var(--safe-bottom));
+      left: calc(10px + var(--safe-left));
+      right: calc(10px + var(--safe-right));
       width: auto; max-width: none;
-      border-radius: 0; border: 0; box-shadow: none;
-      padding: calc(10px + var(--safe-top)) 14px 14px;
+      padding: 10px;
     }
     .voice-panel-header { display: flex; }
     .voice-list { flex: 1; max-height: none; }
