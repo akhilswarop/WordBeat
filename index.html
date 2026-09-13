@@ -532,6 +532,23 @@
   }
   #toast.on { opacity: 1; }
 
+  /* Big and centered rather than anchored near the dial: on a touch drag
+     the dial itself is under the thumb the whole time, so any readout
+     placed near it would be just as occluded as the value already shown
+     inside the dial. Above #toast's z-index so a "Loaded X" toast firing
+     mid-drag (unlikely, but possible) doesn't visually compete with it. */
+  .rate-bubble {
+    position: fixed; z-index: 210;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    padding: 16px 26px; border-radius: 16px;
+    background: var(--paper); border: 1px solid var(--line);
+    box-shadow: var(--shadow-lg);
+    font-size: 28px; font-weight: 800; color: var(--text);
+    font-variant-numeric: tabular-nums;
+    opacity: 0; pointer-events: none; transition: opacity .12s;
+  }
+  .rate-bubble.show { opacity: 1; }
+
   /* Sits just above the player bar rather than overlapping it — this is a
      decision to make (paste this or not), not a passing status message, so
      it needs its own room instead of sharing the toast's spot. */
@@ -797,6 +814,11 @@
 
 <div id="drop"><div>Drop a .txt, .md, .pdf, or .epub file to read it</div></div>
 <div id="toast"></div>
+<!-- OSD-style rate readout shown only while dragging/adjusting the speed
+     dial (#speedDial below) — centered on the viewport, not anchored to
+     the dial itself, since the dial sits right under the thumb during a
+     touch drag and a value shown there would be occluded the whole time. -->
+<div class="rate-bubble" id="rateBubble"><span id="rateBubbleVal">1×</span></div>
 
 <div id="clipPrompt" class="hidden" role="status">
   <div id="clipPromptText"></div>
@@ -3689,6 +3711,8 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 el.speedSlider.max = String(SPEEDS.length - 1);
 el.dial = document.getElementById("speedDial");
 el.dialArc = document.getElementById("dialArc");
+el.rateBubble = document.getElementById("rateBubble");
+el.rateBubbleVal = document.getElementById("rateBubbleVal");
 
 const DIAL_R = 16;
 const DIAL_CIRCUM = 2 * Math.PI * DIAL_R;
@@ -3701,6 +3725,11 @@ document.querySelector(".dial-track").style.strokeDasharray =
 function setSpeedIndex(i) {
   const clamped = Math.max(0, Math.min(SPEEDS.length - 1, Math.round(i)));
   if (Number(el.speedSlider.value) === clamped && el.dialArc.style.strokeDasharray) return;
+  // Not hooked to #rate's own "input" handler below — that same event is
+  // also dispatched once on page load to resync UI state, which would
+  // otherwise fire a spurious haptic tick and bubble flash on every launch.
+  window.AndroidTTS?.hapticTick?.();
+  el.rateBubbleVal.textContent = `${SPEEDS[clamped]}×`;
   el.speedSlider.value = String(clamped);
   el.rate.value = String(SPEEDS[clamped]);
   el.rate.dispatchEvent(new Event("input"));   // reuses the existing handler
@@ -3720,6 +3749,10 @@ const DIAL_PIXELS_PER_STEP = 11;
 
 el.dial.addEventListener("pointerdown", (e) => {
   dialDrag = { y: e.clientY, from: Number(el.speedSlider.value), moved: false };
+  // Shown before setPointerCapture, not after: capture can throw for a
+  // pointer the browser doesn't consider active, and that must not also
+  // swallow the bubble's own visibility.
+  el.rateBubble.classList.add("show");
   el.dial.setPointerCapture(e.pointerId);
 });
 
@@ -3736,9 +3769,16 @@ el.dial.addEventListener("pointerup", (e) => {
     setSpeedIndex(i >= SPEEDS.length - 1 ? 0 : i + 1);   // tap cycles, wrapping
   }
   dialDrag = null;
+  // Same reasoning as pointerdown: hide the bubble before a capture call
+  // that can throw for a pointer the browser no longer considers active,
+  // rather than after — or an exception there would leave it stuck shown.
+  el.rateBubble.classList.remove("show");
   el.dial.releasePointerCapture?.(e.pointerId);
 });
-el.dial.addEventListener("pointercancel", () => { dialDrag = null; });
+el.dial.addEventListener("pointercancel", () => {
+  dialDrag = null;
+  el.rateBubble.classList.remove("show");
+});
 
 el.dial.addEventListener("wheel", (e) => {
   e.preventDefault();

@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import android.view.HapticFeedbackConstants;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
@@ -124,6 +125,17 @@ public class TtsBridge {
     @JavascriptInterface
     public void stop() {
         if (ready) tts.stop();
+    }
+
+    /**
+     * A short tick as the playback-rate dial steps through its ladder.
+     * performHapticFeedback (not Vibrator.vibrate) deliberately: it already
+     * consults both the view's and the system's haptic-enabled settings
+     * before actually vibrating, and needs no VIBRATE permission.
+     */
+    @JavascriptInterface
+    public void hapticTick() {
+        web.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
     }
 
     /**
