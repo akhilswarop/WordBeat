@@ -2103,9 +2103,7 @@ const app = {
     text = this.text;
     if (app.engine) {
       pendingAutoLang = detectScriptLang(text);
-      const _applied = pendingAutoLang && autoSelectVoiceForLanguage?.(pendingAutoLang);
-      setTimeout(() => toast(`detect=${pendingAutoLang} applied=${_applied}`, 8000), 5000);
-      if (_applied) pendingAutoLang = null;
+      if (pendingAutoLang && autoSelectVoiceForLanguage?.(pendingAutoLang)) pendingAutoLang = null;
     }
     this.chunks = chunkText(text);
     this.tokensByChunk = this.chunks.map(c => {
@@ -2563,17 +2561,19 @@ if (!Engine) {
      *  set userPickedVoiceName, so it stays freely re-evaluated on every
      *  new document. */
     const androidAutoSelectVoice = (langPrefix) => {
-      if (userPickedVoiceName) {
-        setTimeout(() => toast(`auto-select skipped: manual pick=${userPickedVoiceName}`, 8000), 5500);
-        return false;
-      }
+      if (userPickedVoiceName) return false;
       const voices = app.engine.listVoices();
       const match = voices.find(v => !v.network && v.locale.toLowerCase().startsWith(langPrefix))
         || voices.find(v => v.locale.toLowerCase().startsWith(langPrefix));
-      setTimeout(() => toast(`voices=${voices.length} match=${match?.name}/${match?.locale}`, 8000), 6000);
       if (!match) return false;
       el.voice.value = match.name;
       app.engine.setVoiceByName(match.name);
+      // Assigning .value directly doesn't fire a 'change' event the way a
+      // real tap does, so without this the trigger/panel kept showing the
+      // previous selection even after the engine had already switched —
+      // caught during an on-device stress test (confirmed via a debug
+      // toast: the match was found and applied correctly, only the visible
+      // label was stale).
       renderVoicePanelRows();
       return true;
     };
