@@ -557,7 +557,17 @@
     <button class="ic" id="btnOpen" data-label="Open file" title="Open a file" aria-label="Open a file">
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17z"/></svg>
     </button>
-    <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,text/plain,text/markdown,text/x-markdown,application/pdf,application/epub+zip">
+    <!-- application/octet-stream is here for one concrete reason, not as a
+         generic catch-all: on-device testing found that Android's system
+         file picker resolves local .md/.markdown files to this MIME type
+         during folder browsing — a different, older lookup table than the
+         one used elsewhere in Android, which doesn't know about the
+         markdown extensions — so without it those files render
+         disabled/unselectable in the picker despite text/markdown being
+         listed. Harmless to widen: importFile() below re-checks the actual
+         filename extension before accepting anything, so this only affects
+         which files the OS *lets you tap*, not what the app will load. -->
+    <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,text/plain,text/markdown,text/x-markdown,application/octet-stream,application/pdf,application/epub+zip">
   </div>
 
   <div class="tb-mid">
