@@ -111,7 +111,12 @@
   /* min-width: 0 is required — flex items default to min-width: auto, so
      the voice select would refuse to shrink below the width of its longest
      option name and push the whole page into horizontal scroll. */
-  .tb-right { justify-content: flex-end; }
+  /* position: relative anchors .voice-panel's desktop popover placement
+     (position: absolute, top/right below) — it lives here rather than on
+     #tools or a wrapper around just the trigger because .voice-panel is a
+     sibling of #tools, not a descendant of it (see the comment by
+     #voicePanel in the HTML for why). */
+  .tb-right { justify-content: flex-end; position: relative; }
 
   .tb-title {
     display: block; width: 100%;
@@ -178,7 +183,6 @@
      with the selection indicator left stranded on the first line. This is
      a normal absolutely-positioned panel instead, styled like the app's
      existing popover patterns (#tools, #clipPrompt). */
-  .voice-picker { position: relative; }
   .voice-trigger {
     display: flex; align-items: center; text-align: left;
     max-width: 200px;
@@ -194,6 +198,13 @@
     padding: 8px;
     display: flex; flex-direction: column; gap: 6px;
   }
+  /* Only actually shown full-screen, under the narrow-viewport media query
+     below — irrelevant noise on the anchored desktop popover otherwise. */
+  .voice-panel-header {
+    display: none; align-items: center; justify-content: space-between;
+    padding: 2px 4px 6px;
+  }
+  .voice-panel-title { font-size: 15px; font-weight: 700; }
   .voice-search {
     font: inherit; font-size: 13px;
     color: var(--text); background: var(--chip);
@@ -599,12 +610,30 @@
       font-size: 13.5px; font-weight: 500; color: var(--text);
     }
     #tools .ic[aria-pressed="true"]::after { color: var(--accent); }
-    #tools select#chapterSelect, #tools .voice-picker {
+    #tools select#chapterSelect {
       width: 100%; max-width: none; margin-top: 2px;
     }
     #tools .voice-trigger {
-      width: 100%; max-width: none; height: 40px;
+      width: 100%; max-width: none; height: 40px; margin-top: 2px;
     }
+
+    /* Full-screen instead of anchored below the trigger: the trigger sits
+       at the bottom of the (already-closing, see openVoicePanel) overflow
+       sheet, so a small popover dropped below it would land far down the
+       screen, overlapping the reading area and player bar rather than
+       reading as connected to what opened it — worse than the native
+       picker it replaced. Full-screen also gives this list the room it
+       actually needs: some devices report hundreds of voices. */
+    .voice-panel {
+      position: fixed; inset: 0; z-index: 50;
+      top: var(--safe-top); bottom: var(--safe-bottom);
+      left: var(--safe-left); right: var(--safe-right);
+      width: auto; max-width: none;
+      border-radius: 0; border: 0; box-shadow: none;
+      padding: calc(10px + var(--safe-top)) 14px 14px;
+    }
+    .voice-panel-header { display: flex; }
+    .voice-list { flex: 1; max-height: none; }
   }
 
   @media (max-width: 640px) {
@@ -677,20 +706,35 @@
            anti-reversion rule) reads/writes it exactly as before. It's
            visually hidden, not display:none (which some engines treat as
            "not focusable/functional") — just moved off-screen — while
-           #voicePicker below is a fully custom-styled trigger + panel that
-           mirrors its contents. Neither browsers nor Android's WebView give
-           any CSS control over a native <select>'s OPEN popup, which is why
-           this exists instead of styling the select directly. -->
+           #voiceTrigger and #voicePanel below are a fully custom-styled
+           trigger + panel that mirror its contents. Neither browsers nor
+           Android's WebView give any CSS control over a native <select>'s
+           OPEN popup, which is why this exists instead of styling the
+           select directly. -->
       <select id="voice" class="sr-only-select" title="Voice" aria-label="Voice"></select>
-      <div class="voice-picker" id="voicePicker">
-        <button type="button" class="voice-trigger" id="voiceTrigger" aria-haspopup="listbox" aria-expanded="false">
-          <span id="voiceTriggerLabel">Voice</span>
-        </button>
-        <div class="voice-panel hidden" id="voicePanel" role="listbox" aria-label="Voice">
-          <input type="text" class="voice-search" id="voiceSearch" placeholder="Search voices…" autocomplete="off">
-          <div class="voice-list" id="voiceList"></div>
-        </div>
+      <button type="button" class="voice-trigger" id="voiceTrigger" aria-haspopup="listbox" aria-expanded="false">
+        <span id="voiceTriggerLabel">Voice</span>
+      </button>
+    </div>
+
+    <!-- A sibling of #tools, not nested inside it: on the narrow layout
+         opening this panel closes #tools (see openVoicePanel), and a
+         display:none ancestor hides every descendant regardless of the
+         descendant's own position — nesting this inside #tools would hide
+         it the instant #tools closed, which is exactly the bug this
+         structure avoids. .tb-right (position: relative, below) anchors
+         its desktop-popover placement instead of #tools. -->
+    <div class="voice-panel hidden" id="voicePanel" role="listbox" aria-label="Voice">
+      <!-- Only shown full-screen (narrow viewports, see the media query
+           below) — the anchored desktop popover doesn't need it. No close
+           button: picking a row (or tapping outside, or Escape) already
+           closes the panel, so a dedicated close control would be a second
+           way to do the same thing. -->
+      <div class="voice-panel-header">
+        <span class="voice-panel-title">Voice</span>
       </div>
+      <input type="text" class="voice-search" id="voiceSearch" placeholder="Search voices…" autocomplete="off">
+      <div class="voice-list" id="voiceList"></div>
     </div>
 
     <button class="ic" id="btnMore" title="More controls" aria-label="More controls" aria-expanded="false">
@@ -1974,7 +2018,6 @@ const el = {
   stop: document.getElementById("btnStop"),
   edit: document.getElementById("btnEdit"),
   voice: document.getElementById("voice"),
-  voicePicker: document.getElementById("voicePicker"),
   voiceTrigger: document.getElementById("voiceTrigger"),
   voiceTriggerLabel: document.getElementById("voiceTriggerLabel"),
   voicePanel: document.getElementById("voicePanel"),
@@ -2384,6 +2427,12 @@ function updateVoiceTrigger() {
 }
 
 function openVoicePanel() {
+  // On the narrow layout the panel goes full-screen (see the media query
+  // above) and takes over visually anyway — closing the overflow sheet
+  // underneath it avoids two stacked popovers. closeTools() is a harmless
+  // no-op on the wide desktop layout, where #tools has no "open" state to
+  // begin with.
+  closeTools();
   el.voicePanel.classList.remove("hidden");
   el.voiceTrigger.setAttribute("aria-expanded", "true");
   el.voiceSearch.value = "";
@@ -2421,7 +2470,9 @@ el.voiceTrigger.addEventListener("click", () => {
   else closeVoicePanel();
 });
 document.addEventListener("click", (e) => {
-  if (!el.voicePicker.contains(e.target)) closeVoicePanel();
+  // Trigger and panel are siblings now (see the HTML comment by
+  // #voicePanel), so "outside" means outside both, not outside one wrapper.
+  if (!el.voiceTrigger.contains(e.target) && !el.voicePanel.contains(e.target)) closeVoicePanel();
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeVoicePanel();
