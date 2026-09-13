@@ -2104,7 +2104,7 @@ const app = {
     if (app.engine) {
       pendingAutoLang = detectScriptLang(text);
       const _applied = pendingAutoLang && autoSelectVoiceForLanguage?.(pendingAutoLang);
-      toast(`detect=${pendingAutoLang} applied=${_applied}`, 8000);
+      setTimeout(() => toast(`detect=${pendingAutoLang} applied=${_applied}`, 8000), 5000);
       if (_applied) pendingAutoLang = null;
     }
     this.chunks = chunkText(text);
@@ -2564,13 +2564,13 @@ if (!Engine) {
      *  new document. */
     const androidAutoSelectVoice = (langPrefix) => {
       if (userPickedVoiceName) {
-        toast(`auto-select skipped: manual pick=${userPickedVoiceName}`, 8000);
+        setTimeout(() => toast(`auto-select skipped: manual pick=${userPickedVoiceName}`, 8000), 5500);
         return false;
       }
       const voices = app.engine.listVoices();
       const match = voices.find(v => !v.network && v.locale.toLowerCase().startsWith(langPrefix))
         || voices.find(v => v.locale.toLowerCase().startsWith(langPrefix));
-      toast(`voices=${voices.length} match=${match?.name}/${match?.locale}`, 8000);
+      setTimeout(() => toast(`voices=${voices.length} match=${match?.name}/${match?.locale}`, 8000), 6000);
       if (!match) return false;
       el.voice.value = match.name;
       app.engine.setVoiceByName(match.name);
