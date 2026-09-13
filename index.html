@@ -3482,13 +3482,31 @@ function looksLikeBareUrl(text) {
   }
 }
 
+/** Share-sheet payloads are usually a bare URL or "Title + URL" (most
+ *  apps' Share buttons produce one of these two shapes) — unlike a
+ *  clipboard paste, so the stricter whole-string check looksLikeBareUrl
+ *  needs for that case is intentionally relaxed here. Only extracts when
+ *  removing the URL leaves a short remainder (a title), so a shared
+ *  passage that happens to cite a URL still falls through to being read
+ *  as text rather than silently fetched instead. */
+function extractSharedUrl(text) {
+  const trimmed = text.trim();
+  if (looksLikeBareUrl(trimmed)) return trimmed;
+  const match = trimmed.match(/https?:\/\/\S+/);
+  if (!match) return null;
+  const url = match[0].replace(/[.,;:!?)\]}'"]+$/, "");   // trailing sentence punctuation
+  const remainder = (trimmed.slice(0, match.index) + trimmed.slice(match.index + match[0].length)).trim();
+  return remainder.length <= 200 ? url : null;
+}
+
 /** The entry point for Android's Share sheet (see MainActivity's
  *  deliverPendingShare), distinct from handlePastedText: sharing a link
  *  from another app is already an explicit, deliberate action — unlike a
  *  clipboard that might just happen to hold a stale URL — so this fetches
  *  it directly rather than routing through the confirm-first prompt below. */
 function handleSharedText(text) {
-  if (looksLikeBareUrl(text)) { fetchAndReadUrl(text.trim()); return; }
+  const url = extractSharedUrl(text);
+  if (url) { fetchAndReadUrl(url); return; }
   handlePastedText(text);
 }
 
