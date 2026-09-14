@@ -2829,6 +2829,59 @@ const MARKDOWN_SIGNALS = [
 ];
 
 /**
+ * Same problem as tsvBlocksToMarkdownTables below, for ASCII-art diagrams
+ * instead of tables: a "Copy" button commonly keeps a fenced code block's
+ * own content but drops its ``` markers, and an ASCII diagram relies
+ * entirely on that fence to tell the Markdown parser to preserve its
+ * whitespace — without it, the lines land in an ordinary paragraph and
+ * #reader.rich's `white-space: normal` (necessary for real prose; a real
+ * <pre> keeps its own whitespace regardless, per the browser's default
+ * stylesheet) collapses every run of alignment spaces down to one,
+ * destroying the diagram's structure. Box-drawing/arrow glyphs
+ * (┌─┐│└┘├┤┬┴┼►◄▲▼) are as strong and unambiguous a signal as the literal
+ * tab character below — ordinary prose never contains them — so a run of
+ * lines carrying one is wrapped back into a fenced block before anything
+ * else parses the text. Tracks fence state while scanning so an already
+ * properly-fenced block (one that kept its ``` markers) is left alone
+ * rather than double-wrapped.
+ */
+const BOX_DRAWING_RE = /[─-╿■-◿]/;   // Box Drawing + Geometric Shapes blocks
+function asciiArtToCodeBlocks(raw) {
+  const lines = raw.split("\n");
+  const isFence = (l) => /^[ \t]*(```|~~~)/.test(l);
+  // Once inside a detected run, a line stays part of it if it's blank,
+  // still carries a box-drawing glyph, or is column-aligned with a 2+
+  // space gap between words — the shape a diagram's own plain-text labels
+  // take once torn loose from the boxes around them (a label row has no
+  // box-drawing character of its own, only the alignment spacing). Only
+  // the strict box-drawing check starts a run, to keep this from ever
+  // misfiring on ordinary prose.
+  const continuesDiagram = (l) => l.trim() === "" || BOX_DRAWING_RE.test(l) || /\S {2,}\S/.test(l);
+  const out = [];
+  let inFence = false;
+  let i = 0;
+  while (i < lines.length) {
+    if (isFence(lines[i])) {
+      inFence = !inFence;
+      out.push(lines[i]);
+      i++;
+      continue;
+    }
+    if (!inFence && BOX_DRAWING_RE.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && !isFence(lines[j]) && continuesDiagram(lines[j])) j++;
+      while (j > i + 1 && lines[j - 1].trim() === "") j--;   // drop trailing blanks
+      out.push("```", ...lines.slice(i, j), "```");
+      i = j;
+      continue;
+    }
+    out.push(lines[i]);
+    i++;
+  }
+  return out.join("\n");
+}
+
+/**
  * ChatGPT's own "Copy" button — verified directly by intercepting its
  * clipboard write — puts a table on the clipboard as plain tab-separated
  * text, the same convention as copying out of a spreadsheet: no Markdown
@@ -2903,7 +2956,7 @@ async function prepareDoc(raw, { forceMarkdown = false, cleanable = true, html =
   // fallback further down — that one should still show the original raw
   // text a user actually copied, tabs and all, not a synthetic table it
   // was rewritten into for parsing purposes.
-  const md = tsvBlocksToMarkdownTables(raw);
+  const md = asciiArtToCodeBlocks(tsvBlocksToMarkdownTables(raw));
 
   // A document can have real Markdown syntax (headings, a "---" rule, bold
   // text) everywhere *except* its table — some sources keep a genuine
