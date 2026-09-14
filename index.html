@@ -1298,9 +1298,10 @@ const BLOCK_TAGS = new Set([
   "TR","TABLE","UL","OL","HR","PRE","DIV","FIGCAPTION",
 ]);
 
-// Code blocks are displayed but not read aloud; source read as prose is
-// unpleasant and it would dominate the timing of a technical document.
-const UNSPOKEN_TAGS = new Set(["PRE"]);
+// Nothing is unspoken by tag anymore (code blocks and diagrams alike are
+// read aloud), but the mechanism stays in case a future block type needs
+// to opt out — an empty set here is the "off" state, not dead code.
+const UNSPOKEN_TAGS = new Set([]);
 
 // Cells need a pause between them or a row is spoken as one run-on word
 // ("Col ACol B"), but a paragraph break between every cell is too much.
