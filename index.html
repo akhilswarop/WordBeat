@@ -1321,40 +1321,40 @@ function buildFromDom(root) {
     if (spoken && !spoken.endsWith("\n\n")) spoken += "\n\n";
   };
 
-  function walk(node) {
+  function walk(node, inPre) {
     if (node.nodeType === Node.TEXT_NODE) {
-      // Collapse internal whitespace runs to a single space, the same way
-      // CSS white-space: normal already renders this text visually. Without
-      // this, a source line-wrap inside one paragraph's text node — routine
-      // in hand-formatted EPUBs and multi-line Markdown paragraphs alike —
-      // survives into the spoken string as a literal newline. The chunker
-      // treats any \n as a sentence boundary, so that single stray newline
-      // becomes a chunk split, and each chunk is its own TTS utterance: the
-      // engine adds a full-stop pause at a point with no actual punctuation.
-      let text = node.nodeValue.replace(/\s+/g, " ");
+      // Inside a <pre> (a real code block or an ASCII diagram), every space
+      // and newline is load-bearing layout, not filler — collapsing runs of
+      // whitespace here is exactly what mangles a diagram's alignment. So
+      // this text is left completely untouched; only the word-wrapping below
+      // (which doesn't alter any of the whitespace between words) still runs,
+      // so the content is still spoken without disturbing how it renders.
+      let text = inPre ? node.nodeValue : node.nodeValue.replace(/\s+/g, " ");
       if (!text) return;
 
-      // A text node that is nothing but formatting whitespace — the
-      // indentation between two sibling block tags in pretty-printed XHTML,
-      // extremely common in hand-formatted EPUBs — carries no words, so it
-      // never needs its own span. What it must not do is leak a literal
-      // space into the spoken text right at a paragraph boundary. Appending
-      // at most one space, and only when spoken doesn't already end in
-      // whitespace, keeps a genuine inline gap (a bold span followed by a
-      // word) while dropping the block-boundary case entirely.
-      if (!node.nodeValue.trim()) {
-        if (spoken && !/\s$/.test(spoken)) spoken += " ";
-        return;
-      }
+      if (!inPre) {
+        // A text node that is nothing but formatting whitespace — the
+        // indentation between two sibling block tags in pretty-printed XHTML,
+        // extremely common in hand-formatted EPUBs — carries no words, so it
+        // never needs its own span. What it must not do is leak a literal
+        // space into the spoken text right at a paragraph boundary. Appending
+        // at most one space, and only when spoken doesn't already end in
+        // whitespace, keeps a genuine inline gap (a bold span followed by a
+        // word) while dropping the block-boundary case entirely.
+        if (!node.nodeValue.trim()) {
+          if (spoken && !/\s$/.test(spoken)) spoken += " ";
+          return;
+        }
 
-      // The other half of the same rule, for a node that is NOT pure
-      // whitespace: its own leading indentation is still real whitespace
-      // and still collapses to a leading space above — e.g. "<p>\n  Alice
-      // was…" — and if this is the first content of a fresh block, that
-      // leading space would land directly after the "\n\n" just inserted.
-      // Only strip it in that position; a leading space here otherwise is
-      // a genuine inline gap after a preceding sibling.
-      if (spoken.endsWith("\n\n") && text.startsWith(" ")) text = text.slice(1);
+        // The other half of the same rule, for a node that is NOT pure
+        // whitespace: its own leading indentation is still real whitespace
+        // and still collapses to a leading space above — e.g. "<p>\n  Alice
+        // was…" — and if this is the first content of a fresh block, that
+        // leading space would land directly after the "\n\n" just inserted.
+        // Only strip it in that position; a leading space here otherwise is
+        // a genuine inline gap after a preceding sibling.
+        if (spoken.endsWith("\n\n") && text.startsWith(" ")) text = text.slice(1);
+      }
 
       const base = spoken.length;
       const frag = document.createDocumentFragment();
@@ -1406,7 +1406,7 @@ function buildFromDom(root) {
       return;
     }
 
-    for (const kid of [...node.childNodes]) walk(kid);
+    for (const kid of [...node.childNodes]) walk(kid, inPre || node.tagName === "PRE");
 
     if (CELL_TAGS.has(node.tagName)) {
       if (spoken && !/[\s,]$/.test(spoken)) spoken += ", ";
