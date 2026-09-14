@@ -3017,7 +3017,17 @@ async function prepareDoc(raw, { forceMarkdown = false, cleanable = true, html =
 
   if (mdTree || htmlTree) {
     const hasTable = (t) => !!t?.querySelector("table");
-    const preferHtml = htmlTree && hasTable(htmlTree) && !hasTable(mdTree);
+    // Same reasoning as the table check above, for headings: ChatGPT's
+    // plain-text "Copy" keeps a genuine heading in the clipboard's HTML
+    // flavour but drops it to a bare, indistinguishable line of plain
+    // text — unlike a table's tabs or a bullet's leading glyph, there is
+    // no surviving marker in the plain text for a heading to be
+    // reconstructed from, so this is the only way to recover it at all.
+    const hasHeading = (t) => !!t?.querySelector("h1,h2,h3,h4,h5,h6");
+    const preferHtml = htmlTree && (
+      (hasTable(htmlTree) && !hasTable(mdTree)) ||
+      (hasHeading(htmlTree) && !hasHeading(mdTree))
+    );
     return { text: null, tree: preferHtml ? htmlTree : (mdTree || htmlTree) };
   }
 
