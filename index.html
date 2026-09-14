@@ -1123,7 +1123,15 @@ class Renderer {
     const top = window.innerHeight * 0.25;
     const bottom = window.innerHeight * 0.68;
     if (r.top < top || r.bottom > bottom) {
-      span.scrollIntoView({ block: "center", behavior: "smooth" });
+      // Not span.scrollIntoView(): with no `inline` option it defaults to
+      // "nearest", which also drags any horizontally-scrollable ancestor
+      // (e.g. a wide ASCII-diagram code block) sideways to bring the
+      // current word into view on that axis too — hiding the block's own
+      // start off-screen mid-read. This only ever needs to manage the
+      // page's own vertical position, so it scrolls the window directly
+      // and leaves every other scroll container untouched.
+      const targetTop = window.scrollY + r.top + r.height / 2 - window.innerHeight / 2;
+      window.scrollTo({ top: targetTop, behavior: "smooth" });
     }
   }
 
@@ -2829,6 +2837,24 @@ const MARKDOWN_SIGNALS = [
 ];
 
 /**
+ * Same class of problem again, for bullet lists: ChatGPT's plain-text
+ * "Copy" (and several other apps') marks a bullet with the literal glyph
+ * •, not one of Markdown's own hyphen/asterisk/plus markers — so neither
+ * MARKDOWN_SIGNALS' bullet check nor the parser after it ever recognizes
+ * these lines as a list at all. They fall through to being read as flat
+ * text with a stray bullet character glued to the front of each line
+ * instead of becoming a real,
+ * indented list item. Runs before asciiArtToCodeBlocks below: ◦ and ▪
+ * (common for nested bullets) both fall inside that function's box-
+ * drawing/geometric-shape detection range, so bullets must be converted
+ * to plain "- " first or a nested-bullet line could be mistaken for part
+ * of a diagram instead.
+ */
+function literalBulletsToMarkdown(raw) {
+  return raw.replace(/^([ \t]*)[•◦▪‣][ \t]+/gm, "$1- ");
+}
+
+/**
  * Same problem as tsvBlocksToMarkdownTables below, for ASCII-art diagrams
  * instead of tables: a "Copy" button commonly keeps a fenced code block's
  * own content but drops its ``` markers, and an ASCII diagram relies
@@ -2956,7 +2982,7 @@ async function prepareDoc(raw, { forceMarkdown = false, cleanable = true, html =
   // fallback further down — that one should still show the original raw
   // text a user actually copied, tabs and all, not a synthetic table it
   // was rewritten into for parsing purposes.
-  const md = asciiArtToCodeBlocks(tsvBlocksToMarkdownTables(raw));
+  const md = asciiArtToCodeBlocks(literalBulletsToMarkdown(tsvBlocksToMarkdownTables(raw)));
 
   // A document can have real Markdown syntax (headings, a "---" rule, bold
   // text) everywhere *except* its table — some sources keep a genuine
