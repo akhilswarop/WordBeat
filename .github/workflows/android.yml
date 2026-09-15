@@ -38,6 +38,12 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # Default packages are "tools platform-tools" — Google has since
+          # pulled the legacy "tools" package from the SDK repository
+          # entirely, so requesting it now fails the whole setup step.
+          # Only platform-tools was ever actually needed here.
+          packages: "platform-tools"
 
       - name: Install the platform and build-tools this project targets
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
