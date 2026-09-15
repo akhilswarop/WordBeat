@@ -553,7 +553,7 @@
   /* Sits just above the player bar rather than overlapping it — this is a
      decision to make (paste this or not), not a passing status message, so
      it needs its own room instead of sharing the toast's spot. */
-  #clipPrompt {
+  #clipPrompt, #ocrPrompt {
     position: fixed; z-index: 35;
     left: 50%; bottom: calc(26px + var(--safe-bottom) + 118px); transform: translateX(-50%);
     width: min(420px, calc(100vw - 32px));
@@ -562,24 +562,28 @@
     padding: 12px 14px;
     display: flex; align-items: center; gap: 12px;
   }
+  /* Its confirmation copy runs longer than a clipboard preview, so unlike
+     #clipPromptText this wraps instead of eliding to one line. */
+  #ocrPrompt { width: min(460px, calc(100vw - 32px)); align-items: flex-start; }
   #clipPromptText {
     flex: 1; min-width: 0; font-size: 13px; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  #ocrPromptText { flex: 1; min-width: 0; font-size: 13px; color: var(--text); line-height: 1.4; }
   /* These two are styled entirely here rather than borrowing .ic/.pill:
      .ic hard-sets a 34px square for icon glyphs, which silently clipped
      "Not now" down to a third of its width. The preview text, which has an
      ellipsis, is the only thing in this row that should give up space. */
   #clipPromptActions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-  #clipPromptDismiss, #clipPromptPaste { flex-shrink: 0; }
-  #clipPromptDismiss {
+  #clipPromptDismiss, #clipPromptPaste, .prompt-dismiss, .prompt-primary { flex-shrink: 0; }
+  #clipPromptDismiss, .prompt-dismiss {
     appearance: none; border: 0; background: transparent; color: var(--muted);
     font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
     padding: 6px 8px; border-radius: 8px; transition: background .12s, color .12s;
     white-space: nowrap;
   }
-  #clipPromptDismiss:hover { background: var(--chip); color: var(--text); }
-  #clipPromptPaste {
+  #clipPromptDismiss:hover, .prompt-dismiss:hover { background: var(--chip); color: var(--text); }
+  #clipPromptPaste, .prompt-primary {
     appearance: none; border: 0; cursor: pointer;
     font: inherit; font-size: 12.5px; font-weight: 700;
     padding: 7px 14px; border-radius: 10px;
@@ -587,8 +591,25 @@
     transition: box-shadow .12s;
     white-space: nowrap;
   }
-  #clipPromptPaste:hover {
+  #clipPromptPaste:hover, .prompt-primary:hover {
     box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+
+  /* A slim status bar for an active OCR run — same bubble position as
+     #clipPrompt/#ocrPrompt, but a passing progress readout rather than a
+     decision, so it carries just a Cancel affordance, not two choices. */
+  #ocrProgress {
+    position: fixed; z-index: 35;
+    left: 50%; bottom: calc(26px + var(--safe-bottom) + 118px); transform: translateX(-50%);
+    width: min(360px, calc(100vw - 32px));
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--shadow-lg);
+    padding: 10px 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  #ocrProgressText {
+    flex: 1; min-width: 0; font-size: 13px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
   /* On a phone the sheet metaphor just wastes the width the text needs, so
@@ -694,7 +715,7 @@
          listed. Harmless to widen: importFile() below re-checks the actual
          filename extension before accepting anything, so this only affects
          which files the OS *lets you tap*, not what the app will load. -->
-    <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,text/plain,text/markdown,text/x-markdown,application/octet-stream,application/pdf,application/epub+zip">
+    <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,.jpg,.jpeg,.png,text/plain,text/markdown,text/x-markdown,application/octet-stream,application/pdf,application/epub+zip,image/jpeg,image/png">
   </div>
 
   <div class="tb-mid">
@@ -813,7 +834,7 @@
   <span id="timingMode">estimated timing</span>
 </div>
 
-<div id="drop"><div>Drop a .txt, .md, .pdf, or .epub file to read it</div></div>
+<div id="drop"><div>Drop a .txt, .md, .pdf, .epub, or photo (JPG/PNG) to read it</div></div>
 <div id="toast"></div>
 <!-- OSD-style rate readout shown only while dragging/adjusting the speed
      dial (#speedDial below) — centered on the viewport, not anchored to
@@ -827,6 +848,19 @@
     <button id="clipPromptDismiss" title="Dismiss">Not now</button>
     <button id="clipPromptPaste" title="Paste this in">Paste</button>
   </div>
+</div>
+
+<div id="ocrPrompt" class="hidden" role="status">
+  <div id="ocrPromptText"></div>
+  <div class="prompt-actions">
+    <button id="ocrPromptCancel" class="prompt-dismiss" title="Cancel">Cancel</button>
+    <button id="ocrPromptRun" class="prompt-primary" title="Run OCR">Run OCR</button>
+  </div>
+</div>
+
+<div id="ocrProgress" class="hidden" role="status">
+  <div id="ocrProgressText"></div>
+  <button id="ocrCancelBtn" class="prompt-dismiss" title="Cancel OCR">Cancel</button>
 </div>
 
 <script>
@@ -3078,6 +3112,210 @@ function loadPdfJs() {
   return pdfjsPromise;
 }
 
+/* --------------------------- OCR (Tesseract.js) --------------------- *
+ * Used for two cases the text-layer paths above can't handle: a scanned
+ * PDF (extractPdfOriginalLayout finds zero text items) and a plain photo
+ * import. Both feed the exact same {tree, text, tokens, spans,
+ * rangeHighlighter} shape app.load already accepts as a prebuilt bundle,
+ * so nothing downstream of import needs to know OCR was involved.
+ * ---------------------------------------------------------------------- */
+
+const TESSERACT_URL = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/7.0.0/tesseract.min.js";
+let tesseractPromise = null;
+
+/** Fetched on first OCR use only — a scripted <script> tag, not import(),
+ *  since Tesseract's UMD build attaches window.Tesseract the same way
+ *  JSZip's does (loadJSZip below), rather than exporting an ES module. */
+function loadTesseract() {
+  if (!tesseractPromise) {
+    tesseractPromise = new Promise((resolve, reject) => {
+      if (window.Tesseract) return resolve(window.Tesseract);
+      const script = document.createElement("script");
+      script.src = TESSERACT_URL;
+      script.onload = () => resolve(window.Tesseract);
+      script.onerror = () => reject(new Error("Failed to fetch Tesseract.js"));
+      document.head.appendChild(script);
+    }).catch((err) => { tesseractPromise = null; throw err; });
+  }
+  return tesseractPromise;
+}
+
+const OCR_PAGE_WARN_THRESHOLD = 15;
+let ocrCancelled = false;
+
+/** Wired to the Cancel button shown while OCR is running. Only sets a flag
+ *  — it deliberately does NOT terminate the worker here. Tesseract.js has
+ *  no way to abort a recognize() call already in flight, and terminating
+ *  the worker out from under one doesn't reject that pending promise, it
+ *  just abandons it: the worker thread is gone, so nothing ever answers
+ *  it, and the caller hangs forever awaiting a response that will never
+ *  arrive (confirmed live — a cancelled run sat unresolved for minutes).
+ *  So cancellation is per-page: the current page finishes normally, the
+ *  loop below sees the flag before starting the next one, and the worker
+ *  is only ever terminated once nothing is in flight (see the `finally`
+ *  in runOcrOnCanvases). */
+function cancelOcr() {
+  ocrCancelled = true;
+}
+
+/** Runs OCR over already-rendered page canvases and builds the same
+ *  {text, tokens, spans, rangeHighlighter} shape buildFromDom/
+ *  extractPdfOriginalLayout produce, positioning each recognized word as
+ *  an invisible span directly over its bounding box — the same "invisible
+ *  text layer glued to a canvas" trick extractPdfOriginalLayout's
+ *  pdf.js TextLayer already uses, just positioned by hand since Tesseract
+ *  hands back per-word boxes instead of a ready-made text layer. Returns
+ *  null if cancelled. */
+async function runOcrOnCanvases(canvases, onProgress) {
+  ocrCancelled = false;
+  const Tesseract = await loadTesseract();
+  const worker = await Tesseract.createWorker("eng");
+  const dpr = window.devicePixelRatio || 1;
+  const tokens = [];
+  const spans = [];
+  let spoken = "";
+
+  // Mirrors buildFromDom's endBlock(): a paragraph break between OCR
+  // paragraphs, without ever doubling up at a page boundary.
+  const endPara = () => {
+    spoken = spoken.replace(/[ \t]+$/, "");
+    if (spoken && !spoken.endsWith("\n\n")) spoken += "\n\n";
+  };
+
+  try {
+    for (let i = 0; i < canvases.length; i++) {
+      if (ocrCancelled) return null;
+      onProgress?.(i + 1, canvases.length);
+
+      const { data } = await worker.recognize(canvases[i], {}, { blocks: true });
+      if (ocrCancelled) return null;
+
+      const pageEl = canvases[i].closest(".pdf-page");
+      let textLayerDiv = pageEl?.querySelector(":scope > .textLayer");
+      if (!textLayerDiv) {
+        textLayerDiv = document.createElement("div");
+        textLayerDiv.className = "textLayer";
+        pageEl?.appendChild(textLayerDiv);
+      }
+
+      for (const block of data.blocks || []) {
+        for (const para of block.paragraphs || []) {
+          for (const line of para.lines || []) {
+            for (const word of line.words || []) {
+              const text = word.text;
+              if (!text) continue;
+              if (spoken && !/\s$/.test(spoken)) spoken += " ";
+              const base = spoken.length;
+
+              const span = document.createElement("span");
+              span.className = "w";
+              span.dataset.i = String(tokens.length);
+              span.textContent = text;
+              const { x0, y0, x1, y1 } = word.bbox;
+              Object.assign(span.style, {
+                position: "absolute",
+                left: (x0 / dpr) + "px",
+                top: (y0 / dpr) + "px",
+                width: Math.max(1, (x1 - x0) / dpr) + "px",
+                height: Math.max(1, (y1 - y0) / dpr) + "px",
+                fontSize: Math.max(1, (y1 - y0) / dpr) + "px",
+                lineHeight: "1",
+                whiteSpace: "pre",
+              });
+              textLayerDiv.appendChild(span);
+
+              tokens.push({ index: tokens.length, text, start: base, end: base + text.length });
+              spans.push(span);
+              spoken += text;
+            }
+          }
+          endPara();
+        }
+      }
+    }
+  } finally {
+    worker.terminate().catch(() => {});
+  }
+
+  if (ocrCancelled) return null;
+  return { text: spoken, tokens, spans, rangeHighlighter: createNativeRangeHighlighter(spans) };
+}
+
+/** The scanned-PDF path: reuses the page canvases extractPdfOriginalLayout
+ *  already rendered for on-screen display rather than rasterizing twice. */
+function runPdfOcr(root, onProgress) {
+  const canvases = [...root.querySelectorAll(".pdf-page canvas")];
+  return runOcrOnCanvases(canvases, onProgress);
+}
+
+/** The single-photo path: draws the image onto one canvas sized like a PDF
+ *  page (capped to the reading column's width so a huge phone photo can't
+ *  blow up OCR cost), then runs the same word-mapping OCR pass. */
+async function extractImageOCR(file, onProgress) {
+  const bitmap = await createImageBitmap(file);
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.min(Math.min(el.reader?.clientWidth || 900, 1100) * dpr, bitmap.width);
+  const scale = targetWidth / bitmap.width;
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+
+  const root = document.createElement("div");
+  root.className = "pdf-pages";
+  const pageEl = document.createElement("div");
+  pageEl.className = "pdf-page";
+  pageEl.style.width = (w / dpr) + "px";
+  pageEl.style.height = (h / dpr) + "px";
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+  pageEl.appendChild(canvas);
+  root.appendChild(pageEl);
+
+  const result = await runOcrOnCanvases([canvas], onProgress);
+  if (!result) return null;
+  return { ...result, tree: root, pages: 1 };
+}
+
+/** Only shown above OCR_PAGE_WARN_THRESHOLD pages — below it, OCR just
+ *  starts. Tesseract.js runs roughly 3-10s/page on desktop, plausibly
+ *  slower in an Android WebView, so a long scan is worth a heads-up while
+ *  a short one shouldn't nag. */
+function confirmOcr(pages, fileName) {
+  if (pages <= OCR_PAGE_WARN_THRESHOLD) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    document.getElementById("ocrPromptText").textContent =
+      `${pages} pages of scanned images in ${fileName} — run OCR to read them aloud? This may take a while and needs a network connection.`;
+    const prompt = document.getElementById("ocrPrompt");
+    const runBtn = document.getElementById("ocrPromptRun");
+    const cancelBtn = document.getElementById("ocrPromptCancel");
+    prompt.classList.remove("hidden");
+    const cleanup = () => {
+      prompt.classList.add("hidden");
+      runBtn.removeEventListener("click", onRun);
+      cancelBtn.removeEventListener("click", onCancel);
+    };
+    const onRun = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+    runBtn.addEventListener("click", onRun);
+    cancelBtn.addEventListener("click", onCancel);
+  });
+}
+
+const ocrProgress = document.getElementById("ocrProgress");
+const ocrProgressText = document.getElementById("ocrProgressText");
+function showOcrProgress(msg) {
+  ocrProgressText.textContent = msg;
+  ocrProgress.classList.remove("hidden");
+}
+function hideOcrProgress() {
+  ocrProgress.classList.add("hidden");
+}
+document.getElementById("ocrCancelBtn").addEventListener("click", cancelOcr);
+
 // Written as escapes, not literal glyphs: if this file is ever served
 // without a UTF-8 charset, literal ligatures decode to mojibake and the
 // character-class range below becomes a parse error that kills the whole
@@ -3353,9 +3591,10 @@ async function importFile(file) {
   const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
   const isEpub = /\.epub$/i.test(file.name) || file.type === "application/epub+zip";
   const isText = TEXT_EXT.test(file.name) || file.type.startsWith("text/");
+  const isImage = /\.(jpe?g|png)$/i.test(file.name) || /^image\/(jpeg|png)$/.test(file.type);
 
-  if (!isPdf && !isEpub && !isText) {
-    toast(`Can't read ${file.name} — text, Markdown, PDF, and EPUB only.`);
+  if (!isPdf && !isEpub && !isText && !isImage) {
+    toast(`Can't read ${file.name} — text, Markdown, PDF, EPUB, and photos (JPG/PNG) only.`);
     return;
   }
 
@@ -3382,13 +3621,23 @@ async function importFile(file) {
 
     if (isPdf) {
       toast(`Rendering ${file.name}…`, 60000);
-      const { tree, text, tokens, spans, pages, rangeHighlighter } = await extractPdfOriginalLayout(file, (n, total) => {
+      let { tree, text, tokens, spans, pages, rangeHighlighter } = await extractPdfOriginalLayout(file, (n, total) => {
         toast(`Rendering page ${n} of ${total}…`, 60000);
       });
 
       if (!tokens.length) {
-        toast("No text found — this PDF is probably scanned images, which need OCR.");
-        return;
+        const proceed = await confirmOcr(pages, file.name);
+        if (!proceed) { toast("Import cancelled."); return; }
+        showOcrProgress(`Reading page 1 of ${pages}…`);
+        let ocrResult;
+        try {
+          ocrResult = await runPdfOcr(tree, (n, total) => showOcrProgress(`Reading page ${n} of ${total}…`));
+        } finally {
+          hideOcrProgress();
+        }
+        if (!ocrResult) { toast("OCR cancelled."); return; }
+        if (!ocrResult.tokens.length) { toast("OCR found no readable text in this document."); return; }
+        ({ text, tokens, spans, rangeHighlighter } = ocrResult);
       }
       exitEpubMode();
       app.raw = null;   // no raw/rendered toggle for a fixed-layout page
@@ -3400,10 +3649,31 @@ async function importFile(file) {
       return;
     }
 
+    if (isImage) {
+      showOcrProgress(`Reading ${file.name}…`);
+      let result;
+      try {
+        result = await extractImageOCR(file);
+      } finally {
+        hideOcrProgress();
+      }
+      if (!result) { toast("OCR cancelled."); return; }
+      if (!result.tokens.length) { toast("OCR found no readable text in this photo."); return; }
+      exitEpubMode();
+      app.raw = null;
+      app.engine?.stop();
+      app.renderer.clear();
+      app.load(null, result.tree, { text: result.text, tokens: result.tokens, spans: result.spans, rangeHighlighter: result.rangeHighlighter });
+      setSource(file.name);
+      toast(`Loaded ${file.name}`);
+      return;
+    }
+
     const raw = await file.text();
     if (!raw.trim()) { toast("That file is empty."); return; }
     loadRaw(raw, file.name, { forceMarkdown: /\.(md|markdown)$/i.test(file.name) });
   } catch (err) {
+    hideOcrProgress();
     const offline = /Failed to fetch|dynamically imported|NetworkError/i.test(err.message || "");
     toast(
       offline
