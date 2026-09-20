@@ -1921,6 +1921,19 @@ class WebSpeechEngine {
     }
   }
 
+  /** Same story as setRate above: an in-progress SpeechSynthesisUtterance
+   *  keeps the voice it started with, so a picked voice otherwise sits
+   *  unused until whatever naturally speaks the next chunk — the current
+   *  sentence ending, or a manual seek — which reads as the picker doing
+   *  nothing. Restarting the current chunk here makes the switch audible
+   *  immediately instead of only on the next unrelated action. */
+  setVoice(voice) {
+    this.voice = voice;
+    if (this.state === "playing") {
+      this.speak(this.chunks, { startIndex: this.cursor, tokensByChunk: this.tokensByChunk });
+    }
+  }
+
   _setState(s) {
     this.state = s;
     this.onStateChange?.(s);
@@ -2057,6 +2070,11 @@ class AndroidTtsEngine {
 
   setVoiceByName(name) {
     try { this.native.setVoice(name); } catch (_) {}
+    // Same restart-to-apply story as setRate above — Android's TTS also
+    // only picks up a voice change on the next utterance, so without this
+    // a picked voice sat silently unused until the sentence ended or the
+    // reader manually seeked.
+    if (this.state === "playing") this._resumeFrom(this._lastChar);
   }
 
   listVoices() {
@@ -2676,7 +2694,7 @@ if (!Engine) {
         : -1;
       if (index < 0) index = voices.findIndex(v => v.localService && /^en/i.test(v.lang));
       el.voice.value = index >= 0 ? index : 0;
-      app.engine.voice = voices[el.voice.value];
+      app.engine.setVoice(voices[el.voice.value]);
 
       if (pendingAutoLang && desktopAutoSelectVoice(pendingAutoLang)) pendingAutoLang = null;
       renderVoicePanelRows();
@@ -2691,7 +2709,7 @@ if (!Engine) {
       if (idx < 0) idx = voices.findIndex(v => v.lang.toLowerCase().startsWith(langPrefix));
       if (idx < 0) return false;
       el.voice.value = idx;
-      app.engine.voice = voices[idx];
+      app.engine.setVoice(voices[idx]);
       // Assigning .value directly doesn't fire a 'change' event the way a
       // real click does, so the trigger/panel would otherwise keep showing
       // the previous selection even though the engine already switched —
@@ -2706,7 +2724,7 @@ if (!Engine) {
 
     el.voice.addEventListener("change", () => {
       const v = speechSynthesis.getVoices()[el.voice.value];
-      app.engine.voice = v;
+      app.engine.setVoice(v);
       userPickedVoice = v ? { name: v.name, lang: v.lang } : null;
       updateVoiceTrigger();
     });
@@ -2726,13 +2744,23 @@ if (!Engine) {
     el.timingMode.classList.remove("show");
   });
 
+  let rateApplyTimer = null;
   el.rate.addEventListener("input", () => {
     const r = parseFloat(el.rate.value);
     el.rateVal.textContent = `${+r.toFixed(2)}×`;
-    app.engine.setRate(r);
+    // The value itself updates immediately — a Play right after adjusting
+    // must use this rate, not whatever the debounce below hasn't applied
+    // yet — but the *restart* setRate triggers when already playing is
+    // debounced. Several quick steps (a fast dial drag, a few D/S presses)
+    // used to restart the current sentence once per step, which read as
+    // constant stuttering instead of one clean speed change; only the
+    // value the reader actually settles on now triggers that restart.
+    app.engine.rate = r;
     updateProgress(app.renderer.active);   // rate changes the time estimate
     syncSpeedSlider();
     renderDial();
+    clearTimeout(rateApplyTimer);
+    rateApplyTimer = setTimeout(() => app.engine.setRate(r), 300);
   });
 
   el.reader.addEventListener("click", (e) => {
