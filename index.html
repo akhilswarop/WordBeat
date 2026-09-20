@@ -4172,6 +4172,38 @@ el.dial.addEventListener("keydown", (e) => {
   else if (e.key === "End") { e.preventDefault(); setSpeedIndex(SPEEDS.length - 1); }
 });
 
+/* Global D/S rate hotkeys, independent of the dial's own SPEEDS ladder —
+ * every ladder rung is itself a multiple of 0.25 (0.75, 1, 1.25, 1.5, 1.75,
+ * 2, 2.5, 3, 4, 5), so stepping by 0.25 from any of them stays on that same
+ * grid; syncSpeedSlider()/renderDial() (already wired to #rate's "input"
+ * handler) then just snap the dial to whichever rung is nearest. */
+let rateBubbleHideTimer = null;
+function nudgeRate(delta) {
+  const min = parseFloat(el.rate.min), max = parseFloat(el.rate.max);
+  const next = Math.min(max, Math.max(min, Math.round((parseFloat(el.rate.value) + delta) * 4) / 4));
+  el.rate.value = String(next);
+  el.rate.dispatchEvent(new Event("input"));
+  window.AndroidTTS?.hapticTick?.();
+  el.rateBubbleVal.textContent = `${next}×`;
+  el.rateBubble.classList.add("show");
+  clearTimeout(rateBubbleHideTimer);
+  rateBubbleHideTimer = setTimeout(() => el.rateBubble.classList.remove("show"), 700);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const key = e.key.toLowerCase();
+  if (key !== "d" && key !== "s") return;
+
+  // Same exemption as the Space handler above: don't steal the letter
+  // while it's meant to be typed somewhere (the editor, voice search, …).
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(a.tagName))) return;
+
+  e.preventDefault();
+  nudgeRate(key === "d" ? 0.25 : -0.25);
+});
+
 /** Keep the slider on the right notch when the rate is changed elsewhere. */
 function syncSpeedSlider() {
   const current = parseFloat(el.rate.value);
