@@ -1773,6 +1773,10 @@ class WebSpeechEngine {
     this._estimateStart = 0;
     this._estimateTokens = null;
     this._pausedAt = 0;
+    // The exact absolute char position of the most recently spoken word —
+    // see setRate/setVoice below for why this is tracked at word rather
+    // than chunk granularity.
+    this._lastChar = 0;
   }
 
   static get available() {
@@ -1812,7 +1816,8 @@ class WebSpeechEngine {
         this._stopEstimator();
         this.onTimingMode?.("native");
       }
-      this.onWord(chunk.charOffset + e.charIndex);
+      this._lastChar = chunk.charOffset + e.charIndex;
+      this.onWord(this._lastChar);
     };
 
     u.onstart = () => {
@@ -1859,7 +1864,8 @@ class WebSpeechEngine {
       if (gen !== this.generation || this.state !== "playing") return;
       const elapsed = (performance.now() - this._estimateStart) / 1000;
       const i = Math.min(tokens.length - 1, Math.floor(elapsed * wps));
-      this.onWord(tokens[i].start);
+      this._lastChar = tokens[i].start;
+      this.onWord(this._lastChar);
       this._raf = requestAnimationFrame(step);
     };
     this._raf = requestAnimationFrame(step);
@@ -1897,7 +1903,8 @@ class WebSpeechEngine {
       if (gen !== this.generation || this.state !== "playing") return;
       const elapsed = (performance.now() - this._estimateStart) / 1000;
       const i = Math.min(tokens.length - 1, Math.floor(elapsed * wps));
-      this.onWord(tokens[i].start);
+      this._lastChar = tokens[i].start;
+      this.onWord(this._lastChar);
       this._raf = requestAnimationFrame(step);
     };
     this._raf = requestAnimationFrame(step);
@@ -1907,31 +1914,55 @@ class WebSpeechEngine {
     this.generation++;              // invalidate every in-flight handler
     this._stopEstimator();
     this._estimateStart = 0;
+    this._lastChar = 0;
     try { this.synth.cancel(); } catch (_) {}
     this._setState("idle");
   }
 
+  /** Re-queues from the exact word last reported as spoken, trimming the
+   *  current chunk down to it — the same trim seekToToken (app, above)
+   *  does for a clicked word. Shared by setRate/setVoice below: neither
+   *  can take effect on an utterance already in progress (a browser
+   *  ignores a rate/voice change mid-utterance the same way Android's
+   *  TextToSpeech does), so both have to re-issue it — but re-issuing
+   *  from cursor's *chunk start*, as this used to, replayed the whole
+   *  current sentence from its beginning on every change. Resuming from
+   *  the word instead makes that re-issue read as a brief blip rather
+   *  than the sentence visibly restarting. */
+  _resumeFrom(absoluteChar) {
+    let ci = this.chunks.findIndex(
+      (c) => absoluteChar >= c.charOffset && absoluteChar < c.charOffset + c.text.length
+    );
+    if (ci < 0) ci = this.cursor;
+    const chunk = this.chunks[ci];
+    if (!chunk) return;
+    const local = Math.max(0, absoluteChar - chunk.charOffset);
+
+    const queue = [
+      { text: chunk.text.slice(local), charOffset: chunk.charOffset + local },
+      ...this.chunks.slice(ci + 1),
+    ];
+    const queueTokens = [
+      (this.tokensByChunk[ci] || []).filter(t => t.start >= chunk.charOffset + local),
+      ...this.tokensByChunk.slice(ci + 1),
+    ];
+    this.speak(queue, { startIndex: 0, tokensByChunk: queueTokens });
+  }
+
   setRate(rate) {
     this.rate = rate;
-    // Web Speech ignores rate changes mid-utterance, so restart from the
-    // current chunk to make the change take effect immediately.
-    if (this.state === "playing") {
-      const resumeAt = this.cursor;
-      this.speak(this.chunks, { startIndex: resumeAt, tokensByChunk: this.tokensByChunk });
-    }
+    if (this.state === "playing") this._resumeFrom(this._lastChar);
   }
 
   /** Same story as setRate above: an in-progress SpeechSynthesisUtterance
    *  keeps the voice it started with, so a picked voice otherwise sits
    *  unused until whatever naturally speaks the next chunk — the current
    *  sentence ending, or a manual seek — which reads as the picker doing
-   *  nothing. Restarting the current chunk here makes the switch audible
-   *  immediately instead of only on the next unrelated action. */
+   *  nothing. Resuming from the current word here makes the switch
+   *  audible immediately instead of only on the next unrelated action. */
   setVoice(voice) {
     this.voice = voice;
-    if (this.state === "playing") {
-      this.speak(this.chunks, { startIndex: this.cursor, tokensByChunk: this.tokensByChunk });
-    }
+    if (this.state === "playing") this._resumeFrom(this._lastChar);
   }
 
   _setState(s) {
