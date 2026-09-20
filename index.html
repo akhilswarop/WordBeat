@@ -445,6 +445,7 @@
   }
 
   .play-btn {
+    position: relative;
     appearance: none; border: 0; cursor: pointer;
     width: 54px; height: 54px; border-radius: 50%;
     background: var(--accent); color: var(--accent-ink);
@@ -455,6 +456,21 @@
   .play-btn:hover { filter: brightness(1.07); }
   .play-btn:active { transform: scale(.94); }
   .play-btn svg { display: block; }
+
+  /* A ring around the button, not a swap of the play/pause icon — state
+     genuinely is "playing" while this shows, the audio just hasn't
+     started coming back yet. Mainly visible for a network voice, where
+     that gap is a real wait; a local voice's gap is short enough that
+     this barely flashes. */
+  .play-btn::before {
+    content: ""; position: absolute; inset: -5px;
+    border-radius: 50%; border: 2.5px solid transparent;
+    border-top-color: var(--accent);
+    opacity: 0; pointer-events: none;
+    animation: play-spin .8s linear infinite;
+  }
+  .play-btn.loading::before { opacity: 1; }
+  @keyframes play-spin { to { transform: rotate(360deg); } }
 
   /* Speed dial: a 270-degree gauge with the value in the middle. */
   .dial {
@@ -1755,11 +1771,12 @@ async function extractEpub(file) {
  * ------------------------------------------------------------------ */
 
 class WebSpeechEngine {
-  constructor({ onWord, onStateChange, onTimingMode, onDone }) {
+  constructor({ onWord, onStateChange, onTimingMode, onDone, onBuffering }) {
     this.onWord = onWord;
     this.onStateChange = onStateChange;
     this.onTimingMode = onTimingMode;
     this.onDone = onDone;
+    this.onBuffering = onBuffering;
 
     this.synth = window.speechSynthesis;
     this.generation = 0;
@@ -1816,12 +1833,17 @@ class WebSpeechEngine {
         this._stopEstimator();
         this.onTimingMode?.("native");
       }
+      this.onBuffering?.(false);   // safety net if onstart never fired
       this._lastChar = chunk.charOffset + e.charIndex;
       this.onWord(this._lastChar);
     };
 
     u.onstart = () => {
       if (gen !== this.generation) return;
+      // The gap between requesting this utterance and this event is the
+      // one a network voice's request round-trip actually shows up in —
+      // a local voice clears it almost immediately.
+      this.onBuffering?.(false);
       // Give the engine a moment to prove it emits boundaries; if it
       // doesn't, fall back rather than freezing the highlight.
       setTimeout(() => {
@@ -1840,6 +1862,7 @@ class WebSpeechEngine {
 
     u.onerror = (e) => {
       if (gen !== this.generation) return;
+      this.onBuffering?.(false);
       if (e.error === "interrupted" || e.error === "canceled") return;
       this._stopEstimator();
       this.cursor++;
@@ -1847,6 +1870,7 @@ class WebSpeechEngine {
     };
 
     this.current = u;
+    this.onBuffering?.(true);
     this.synth.speak(u);
   }
 
@@ -1880,6 +1904,7 @@ class WebSpeechEngine {
     this.synth.pause();
     this._pausedAt = performance.now();
     this._stopEstimator();
+    this.onBuffering?.(false);
     this._setState("paused");
   }
 
@@ -1915,6 +1940,7 @@ class WebSpeechEngine {
     this._stopEstimator();
     this._estimateStart = 0;
     this._lastChar = 0;
+    this.onBuffering?.(false);
     try { this.synth.cancel(); } catch (_) {}
     this._setState("idle");
   }
@@ -1990,11 +2016,12 @@ class WebSpeechEngine {
  * ------------------------------------------------------------------ */
 
 class AndroidTtsEngine {
-  constructor({ onWord, onStateChange, onTimingMode, onDone }) {
+  constructor({ onWord, onStateChange, onTimingMode, onDone, onBuffering }) {
     this.onWord = onWord;
     this.onStateChange = onStateChange;
     this.onTimingMode = onTimingMode;
     this.onDone = onDone;
+    this.onBuffering = onBuffering;
 
     this.native = window.AndroidTTS;
     this.chunks = [];
@@ -2003,6 +2030,10 @@ class AndroidTtsEngine {
     this.state = "idle";
     this.generation = 0;
     this._lastChar = 0;
+    // Which chunk index onBuffering(false) should fire for — TtsBridge
+    // queues the whole remaining batch up front (QUEUE_ADD), so "start"
+    // events arrive one per chunk in order, same as "done" below.
+    this._nextExpectedChunk = 0;
 
     // Single hub the Java side calls into, routed to whichever instance
     // is current.
@@ -2021,9 +2052,18 @@ class AndroidTtsEngine {
       return;
     }
 
+    if (type === "start") {
+      // Only the chunk actually being waited on clears the indicator —
+      // "start" for one already superseded by a stop()/resumeFrom() would
+      // otherwise flash it off right before the new request sets it again.
+      if (Number(payload.id) === this._nextExpectedChunk) this.onBuffering?.(false);
+      return;
+    }
+
     if (type === "range") {
       const chunk = this.chunks[Number(payload.id)];
       if (!chunk) return;
+      this.onBuffering?.(false);   // safety net if "start" was ever missed
       this._lastChar = chunk.charOffset + payload.start;
       this.onTimingMode?.("native");   // ranges are always real here
       this.onWord(this._lastChar);
@@ -2031,15 +2071,23 @@ class AndroidTtsEngine {
     }
 
     if (type === "done") {
+      const id = Number(payload.id);
       // The queue is finished only when the final chunk reports done.
-      if (Number(payload.id) === this.chunks.length - 1 && this.state === "playing") {
+      if (id === this.chunks.length - 1 && this.state === "playing") {
         this._setState("idle");
         this.onDone?.();
+      } else if (this.state === "playing") {
+        // The next queued chunk is about to start — same per-utterance
+        // request gap a network voice has between chunks, not just at
+        // the very first one.
+        this._nextExpectedChunk = id + 1;
+        this.onBuffering?.(true);
       }
       return;
     }
 
     if (type === "error" && this.state === "playing") {
+      this.onBuffering?.(false);
       this._setState("idle");
     }
   }
@@ -2048,7 +2096,9 @@ class AndroidTtsEngine {
     this.native.stop();
     this.generation++;
     this.chunks = chunks;
+    this._nextExpectedChunk = startIndex;
     this._setState("playing");
+    this.onBuffering?.(true);
 
     // Hand the whole queue to the platform and let it run; the utterance id
     // is the chunk index, which is what maps a range back to its chunk.
@@ -2061,6 +2111,7 @@ class AndroidTtsEngine {
   pause() {
     if (this.state !== "playing") return;
     this.native.stop();
+    this.onBuffering?.(false);
     this._setState("paused");
   }
 
@@ -2090,6 +2141,7 @@ class AndroidTtsEngine {
   stop() {
     this.generation++;
     this._lastChar = 0;
+    this.onBuffering?.(false);
     this.native.stop();
     this._setState("idle");
   }
@@ -2622,6 +2674,11 @@ if (!Engine) {
       el.progressFill.style.width = "100%";
       el.timingMode.classList.remove("show");
     },
+    // True from the moment an utterance is requested until audio for it
+    // is actually heard from — a local voice clears this almost
+    // instantly, but a network voice has a real request round-trip
+    // first, which used to pass with no feedback at all.
+    onBuffering: (b) => el.play.classList.toggle("loading", b),
   });
 
   if (Engine === AndroidTtsEngine) {
