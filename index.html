@@ -731,7 +731,7 @@
          listed. Harmless to widen: importFile() below re-checks the actual
          filename extension before accepting anything, so this only affects
          which files the OS *lets you tap*, not what the app will load. -->
-    <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,.jpg,.jpeg,.png,text/plain,text/markdown,text/x-markdown,application/octet-stream,application/pdf,application/epub+zip,image/jpeg,image/png">
+    <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,.docx,.jpg,.jpeg,.png,text/plain,text/markdown,text/x-markdown,application/octet-stream,application/pdf,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png">
   </div>
 
   <div class="tb-mid">
@@ -850,7 +850,7 @@
   <span id="timingMode">estimated timing</span>
 </div>
 
-<div id="drop"><div>Drop a .txt, .md, .pdf, .epub, or photo (JPG/PNG) to read it</div></div>
+<div id="drop"><div>Drop a .txt, .md, .pdf, .epub, .docx, or photo (JPG/PNG) to read it</div></div>
 <div id="toast"></div>
 <!-- OSD-style rate readout shown only while dragging/adjusting the speed
      dial (#speedDial below) — centered on the viewport, not anchored to
@@ -1750,6 +1750,156 @@ async function extractEpub(file) {
   chapters.forEach((c, i) => { if (!c.title) c.title = `Chapter ${i + 1}`; });
 
   return { title: title || "Untitled book", resources, chapters };
+}
+
+/* ------------------------------------------------------------------ *
+ * 3e. DOCX -> DOM
+ *
+ * Also a zip of XML, so this reuses loadJSZip exactly like EPUB above.
+ * Unlike EPUB, a .docx's body is built directly into the same handful of
+ * tags buildFromDom already knows how to speak (p/h1-6/ul/li/table/strong/
+ * em), rather than detouring through sanitizeHtmlDoc — that function
+ * exists to make arbitrary third-party HTML safe to insert, but nothing
+ * here parses HTML at all; the only user-controlled data is plain text
+ * assigned via textContent, which was never unsafe to begin with.
+ *
+ * Word's own XML consistently uses the "w:" prefix for everything in
+ * word/document.xml (bound by that file's own root xmlns declaration), so
+ * matching tag names as literal strings ("w:p", "w:r", ...) via
+ * getElementsByTagName is reliable in practice and far simpler than
+ * namespace-aware DOM APIs. Scope, revision marks, comments, footnotes,
+ * headers/footers, and embedded images are all deliberately out of scope
+ * — this covers what reading a document aloud actually needs: headings,
+ * paragraphs, lists, tables, and bold/italic emphasis.
+ * ------------------------------------------------------------------- */
+
+const DOCX_HEADING_STYLES = {
+  heading1: "h1", heading2: "h2", heading3: "h3",
+  heading4: "h4", heading5: "h5", heading6: "h6",
+  title: "h1",
+};
+
+function docxChildren(el, tag) {
+  return el ? [...el.children].filter((c) => c.tagName === tag) : [];
+}
+function docxChild(el, tag) {
+  return docxChildren(el, tag)[0] || null;
+}
+
+/** A paragraph counts as a list item either the direct way (its own
+ *  <w:pPr> carries a <w:numPr>) or the indirect way real documents just
+ *  as often use: a built-in list style ("List Bullet", "List Number", ...)
+ *  that carries the numbering on the *style* definition instead, which a
+ *  paragraph using it never repeats inline. Word's own style IDs collapse
+ *  the name to no spaces ("ListBullet", "ListNumber2", ...), hence the
+ *  prefix match rather than an exact one. */
+function docxIsListItem(pPr, styleVal) {
+  return !!docxChild(pPr, "w:numPr") || /^list(bullet|number)/.test(styleVal);
+}
+
+/** One <w:p> paragraph (or table-cell paragraph) into a heading/list-item/
+ *  plain paragraph element, its runs' bold/italic preserved. Returns null
+ *  for a paragraph with no actual text (blank spacer lines Word documents
+ *  are full of) — buildFromDom already puts a paragraph break between
+ *  real neighbours regardless, so a skipped empty one loses nothing. */
+function docxParagraphNode(p) {
+  const pPr = docxChild(p, "w:pPr");
+  const styleVal = (docxChild(pPr, "w:pStyle")?.getAttribute("w:val") || "").toLowerCase();
+  const isListItem = docxIsListItem(pPr, styleVal);
+  const tag = isListItem ? "li" : (DOCX_HEADING_STYLES[styleVal] || "p");
+
+  const el = document.createElement(tag);
+  let hasContent = false;
+
+  // Descendant, not direct-child: a run nested inside a <w:hyperlink> is
+  // still this paragraph's text, and there is nothing here to preserve
+  // the link itself for — just the words it wraps.
+  for (const run of p.getElementsByTagName("w:r")) {
+    const rPr = docxChild(run, "w:rPr");
+    const bold = !!docxChild(rPr, "w:b");
+    const italic = !!docxChild(rPr, "w:i");
+
+    let text = "";
+    for (const t of run.getElementsByTagName("w:t")) text += t.textContent;
+    if (run.getElementsByTagName("w:tab").length) text += "\t";
+
+    if (!text) {
+      if (run.getElementsByTagName("w:br").length) { el.appendChild(document.createElement("br")); hasContent = true; }
+      continue;
+    }
+    hasContent = true;
+
+    let node = document.createTextNode(text);
+    if (bold) { const b = document.createElement("strong"); b.appendChild(node); node = b; }
+    if (italic) { const i = document.createElement("em"); i.appendChild(node); node = i; }
+    el.appendChild(node);
+  }
+
+  return hasContent ? el : null;
+}
+
+function docxTableNode(tbl) {
+  const table = document.createElement("table");
+  for (const tr of docxChildren(tbl, "w:tr")) {
+    const rowEl = document.createElement("tr");
+    for (const tc of docxChildren(tr, "w:tc")) {
+      const cellEl = document.createElement("td");
+      for (const p of docxChildren(tc, "w:p")) {
+        const node = docxParagraphNode(p);
+        if (node) cellEl.appendChild(node);
+      }
+      rowEl.appendChild(cellEl);
+    }
+    if (rowEl.childElementCount) table.appendChild(rowEl);
+  }
+  return table;
+}
+
+/** Walks the top-level body once, grouping consecutive list-item
+ *  paragraphs into one <ul> — buildFromDom treats a bare <li> as its own
+ *  block regardless of its parent, but the browser's own bullet/indent
+ *  styling only applies to an <li> actually inside a list container. */
+function convertDocxBody(bodyEl) {
+  const root = document.createElement("div");
+  let currentList = null;
+
+  for (const child of bodyEl.children) {
+    if (child.tagName === "w:tbl") {
+      currentList = null;
+      root.appendChild(docxTableNode(child));
+      continue;
+    }
+    if (child.tagName !== "w:p") continue;   // w:sectPr and anything else carry no readable content
+
+    const childPPr = docxChild(child, "w:pPr");
+    const childStyleVal = (docxChild(childPPr, "w:pStyle")?.getAttribute("w:val") || "").toLowerCase();
+    const isListItem = docxIsListItem(childPPr, childStyleVal);
+    const node = docxParagraphNode(child);
+    if (!node) { currentList = null; continue; }
+
+    if (isListItem) {
+      if (!currentList) { currentList = document.createElement("ul"); root.appendChild(currentList); }
+      currentList.appendChild(node);
+    } else {
+      currentList = null;
+      root.appendChild(node);
+    }
+  }
+  return root;
+}
+
+async function extractDocx(file) {
+  const JSZip = await loadJSZip();
+  const zip = await JSZip.loadAsync(file);
+  const entry = zip.file("word/document.xml");
+  if (!entry) throw new Error("This doesn't look like a Word document.");
+
+  const documentXml = await entry.async("string");
+  const doc = new DOMParser().parseFromString(documentXml, "application/xml");
+  const body = doc.getElementsByTagName("w:body")[0];
+  if (!body) throw new Error("This doesn't look like a Word document.");
+
+  return convertDocxBody(body);
 }
 
 /* ------------------------------------------------------------------ *
@@ -3703,18 +3853,34 @@ function openEpubChapter(index) {
   el.chapterSelect.value = String(index);
 }
 
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 async function importFile(file) {
   const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
   const isEpub = /\.epub$/i.test(file.name) || file.type === "application/epub+zip";
+  const isDocx = /\.docx$/i.test(file.name) || file.type === DOCX_MIME;
   const isText = TEXT_EXT.test(file.name) || file.type.startsWith("text/");
   const isImage = /\.(jpe?g|png)$/i.test(file.name) || /^image\/(jpeg|png)$/.test(file.type);
 
-  if (!isPdf && !isEpub && !isText && !isImage) {
-    toast(`Can't read ${file.name} — text, Markdown, PDF, EPUB, and photos (JPG/PNG) only.`);
+  if (!isPdf && !isEpub && !isDocx && !isText && !isImage) {
+    toast(`Can't read ${file.name} — text, Markdown, PDF, EPUB, Word (.docx), and photos (JPG/PNG) only.`);
     return;
   }
 
   try {
+    if (isDocx) {
+      toast(`Opening ${file.name}…`, 60000);
+      const tree = await extractDocx(file);
+      exitEpubMode();
+      app.raw = null;   // no raw/rendered toggle for a converted document
+      app.engine?.stop();
+      app.renderer.clear();
+      app.load(null, tree);
+      setSource(file.name);
+      toast(`Loaded ${file.name}`);
+      return;
+    }
+
     if (isEpub) {
       toast(`Opening ${file.name}…`, 60000);
       const book = await extractEpub(file);
@@ -3987,13 +4153,13 @@ function handleSharedText(text) {
 }
 
 /** The entry point for Android's Share sheet when the shared item is a
- *  photo rather than text (see MainActivity's readSharedImage/
- *  deliverPendingShare). The native side already read the image into a
- *  base64 data URL — a content:// URI from another app isn't something
- *  this page could resolve itself — so this just turns that back into a
- *  File and routes it through the exact same OCR import path the in-app
- *  file picker's isImage branch already uses. */
-function handleSharedImage(dataUrl, filename) {
+ *  binary file — a photo or a .docx — rather than text (see MainActivity's
+ *  readSharedFile/deliverPendingShare). The native side already read the
+ *  file into a base64 data URL — a content:// URI from another app isn't
+ *  something this page could resolve itself — so this just turns that
+ *  back into a File and routes it through importFile exactly like a file
+ *  picked from the in-app picker, which already dispatches by name/type. */
+function handleSharedFile(dataUrl, filename) {
   const [header, base64] = dataUrl.split(",");
   const mime = (header.match(/data:(.*?);base64/) || [])[1] || "application/octet-stream";
   const binary = atob(base64);

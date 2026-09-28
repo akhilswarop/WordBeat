@@ -62,11 +62,11 @@ public class MainActivity extends Activity {
      */
     private boolean pageReady;
     private String pendingSharedText;
-    // {dataUrl, filename} for a shared photo — read into memory up front
-    // (see readSharedImage) since a content:// URI from another app is only
-    // guaranteed valid for the lifetime of this intent, and the JS side has
-    // no way to resolve one at all.
-    private String[] pendingSharedImage;
+    // {dataUrl, filename} for a shared photo or .docx — read into memory
+    // up front (see readSharedFile) since a content:// URI from another
+    // app is only guaranteed valid for the lifetime of this intent, and
+    // the JS side has no way to resolve one at all.
+    private String[] pendingSharedFile;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -127,7 +127,7 @@ public class MainActivity extends Activity {
                 // surfacing an unrelated "paste this?" banner right on top
                 // of content the user just deliberately shared in would
                 // read as noise, not help.
-                boolean hadShare = pendingSharedText != null || pendingSharedImage != null;
+                boolean hadShare = pendingSharedText != null || pendingSharedFile != null;
                 deliverPendingShare();
                 if (!hadShare) view.evaluateJavascript("checkClipboardOnResume()", null);
             }
@@ -235,26 +235,33 @@ public class MainActivity extends Activity {
         handleIncomingIntent(intent);
     }
 
+    // Types other than plain text that this app declares an intent-filter
+    // for (AndroidManifest.xml) and hands off as a binary file rather than
+    // reading a text extra — see handleIncomingIntent.
+    private static final String DOCX_MIME =
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
     /**
      * A share from another app's own Share button — as opposed to a
      * copy/paste — arrives as an ACTION_SEND intent carrying either one
-     * plain-text string or, for a photo, a content:// URI in EXTRA_STREAM.
-     * Text is handed to handleSharedText, not handlePastedText directly:
-     * sharing a bare web link (the common case from a browser's Share
-     * sheet) should fetch and read that page, not read the URL string
-     * aloud as text — handleSharedText tells the two apart and only falls
-     * through to the identical Markdown/table detection paste already uses
-     * when it isn't a link.
+     * plain-text string or, for a photo or a .docx, a content:// URI in
+     * EXTRA_STREAM. Text is handed to handleSharedText, not
+     * handlePastedText directly: sharing a bare web link (the common case
+     * from a browser's Share sheet) should fetch and read that page, not
+     * read the URL string aloud as text — handleSharedText tells the two
+     * apart and only falls through to the identical Markdown/table
+     * detection paste already uses when it isn't a link.
      */
     private void handleIncomingIntent(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
 
         String type = intent.getType();
-        if (type != null && type.startsWith("image/")) {
-            Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-            if (imageUri == null) return;
-            pendingSharedImage = readSharedImage(imageUri, type);
-            if (pendingSharedImage != null) deliverPendingShare();
+        boolean isBinaryShare = type != null && (type.startsWith("image/") || DOCX_MIME.equals(type));
+        if (isBinaryShare) {
+            Uri fileUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (fileUri == null) return;
+            pendingSharedFile = readSharedFile(fileUri, type);
+            if (pendingSharedFile != null) deliverPendingShare();
             return;
         }
 
@@ -265,15 +272,16 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Reads the shared photo into memory as a base64 data URL up front,
-     * rather than handing the JS side the content:// URI itself — WebView's
-     * JS has no way to resolve a content:// URI (it isn't http(s) or a
-     * bundled asset), and the URI's read grant is only guaranteed to last
-     * for the lifetime of this intent, not until whenever the page gets
-     * around to asking for it. A phone photo is a few MB at most, well
-     * within what evaluateJavascript can carry as one string argument.
+     * Reads the shared photo or .docx into memory as a base64 data URL up
+     * front, rather than handing the JS side the content:// URI itself —
+     * WebView's JS has no way to resolve a content:// URI (it isn't
+     * http(s) or a bundled asset), and the URI's read grant is only
+     * guaranteed to last for the lifetime of this intent, not until
+     * whenever the page gets around to asking for it. Either file type is
+     * a few MB at most in the common case, well within what
+     * evaluateJavascript can carry as one string argument.
      */
-    private String[] readSharedImage(Uri uri, String mimeType) {
+    private String[] readSharedFile(Uri uri, String mimeType) {
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in == null) return null;
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -283,25 +291,42 @@ public class MainActivity extends Activity {
 
             String base64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
             String dataUrl = "data:" + mimeType + ";base64," + base64;
-            // The real filename isn't worth an extra ContentResolver query
-            // for — index.html only inspects the extension (falling back to
-            // the MIME type either way) to decide whether it can import a
-            // file, and shows this name only briefly in a toast.
-            String ext = mimeType.contains("png") ? "png" : "jpg";
-            return new String[]{ dataUrl, "shared-photo." + ext };
+            return new String[]{ dataUrl, displayNameOrFallback(uri, mimeType) };
         } catch (Exception e) {
             return null;
         }
     }
 
+    /** The sending app's own filename when it bothered to supply one (most
+     *  do, via OpenableColumns), falling back to a synthesized name from
+     *  the MIME type — index.html decides how to import a file by
+     *  extension, falling back to the File object's own MIME type either
+     *  way, so a fallback name is never a hard blocker, just a slightly
+     *  less faithful "Loaded ..." toast afterward. */
+    private String displayNameOrFallback(Uri uri, String mimeType) {
+        try (android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) {
+                    String name = cursor.getString(idx);
+                    if (name != null && !name.isEmpty()) return name;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        if (DOCX_MIME.equals(mimeType)) return "shared-document.docx";
+        String ext = mimeType.contains("png") ? "png" : "jpg";
+        return "shared-photo." + ext;
+    }
+
     private void deliverPendingShare() {
         if (!pageReady) return;
 
-        if (pendingSharedImage != null) {
-            String[] image = pendingSharedImage;
-            pendingSharedImage = null;
-            web.evaluateJavascript("handleSharedImage(" + JSONObject.quote(image[0])
-                    + "," + JSONObject.quote(image[1]) + ")", null);
+        if (pendingSharedFile != null) {
+            String[] file = pendingSharedFile;
+            pendingSharedFile = null;
+            web.evaluateJavascript("handleSharedFile(" + JSONObject.quote(file[0])
+                    + "," + JSONObject.quote(file[1]) + ")", null);
             return;
         }
 
