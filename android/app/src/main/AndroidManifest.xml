@@ -39,6 +39,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- Same idea for a photo — e.g. from Gallery or Camera's own
+                 Share button — routed through the same OCR import path the
+                 in-app file picker already uses for a picked image. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

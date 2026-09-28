@@ -3986,6 +3986,22 @@ function handleSharedText(text) {
   handlePastedText(text);
 }
 
+/** The entry point for Android's Share sheet when the shared item is a
+ *  photo rather than text (see MainActivity's readSharedImage/
+ *  deliverPendingShare). The native side already read the image into a
+ *  base64 data URL — a content:// URI from another app isn't something
+ *  this page could resolve itself — so this just turns that back into a
+ *  File and routes it through the exact same OCR import path the in-app
+ *  file picker's isImage branch already uses. */
+function handleSharedImage(dataUrl, filename) {
+  const [header, base64] = dataUrl.split(",");
+  const mime = (header.match(/data:(.*?);base64/) || [])[1] || "application/octet-stream";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  importFile(new File([bytes], filename, { type: mime }));
+}
+
 /**
  * Called from Android's MainActivity.onResume(), on every return to the
  * app — not just a cold launch, since this only ever suggests a paste

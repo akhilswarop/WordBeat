@@ -19,6 +19,8 @@ import android.view.WindowInsets;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.Locale;
 
 /**
@@ -60,6 +62,11 @@ public class MainActivity extends Activity {
      */
     private boolean pageReady;
     private String pendingSharedText;
+    // {dataUrl, filename} for a shared photo — read into memory up front
+    // (see readSharedImage) since a content:// URI from another app is only
+    // guaranteed valid for the lifetime of this intent, and the JS side has
+    // no way to resolve one at all.
+    private String[] pendingSharedImage;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -120,7 +127,7 @@ public class MainActivity extends Activity {
                 // surfacing an unrelated "paste this?" banner right on top
                 // of content the user just deliberately shared in would
                 // read as noise, not help.
-                boolean hadShare = pendingSharedText != null;
+                boolean hadShare = pendingSharedText != null || pendingSharedImage != null;
                 deliverPendingShare();
                 if (!hadShare) view.evaluateJavascript("checkClipboardOnResume()", null);
             }
@@ -230,8 +237,9 @@ public class MainActivity extends Activity {
 
     /**
      * A share from another app's own Share button — as opposed to a
-     * copy/paste — arrives as an ACTION_SEND intent carrying one plain-text
-     * string. Handed to handleSharedText, not handlePastedText directly:
+     * copy/paste — arrives as an ACTION_SEND intent carrying either one
+     * plain-text string or, for a photo, a content:// URI in EXTRA_STREAM.
+     * Text is handed to handleSharedText, not handlePastedText directly:
      * sharing a bare web link (the common case from a browser's Share
      * sheet) should fetch and read that page, not read the URL string
      * aloud as text — handleSharedText tells the two apart and only falls
@@ -240,14 +248,64 @@ public class MainActivity extends Activity {
      */
     private void handleIncomingIntent(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
+
+        String type = intent.getType();
+        if (type != null && type.startsWith("image/")) {
+            Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (imageUri == null) return;
+            pendingSharedImage = readSharedImage(imageUri, type);
+            if (pendingSharedImage != null) deliverPendingShare();
+            return;
+        }
+
         String text = intent.getStringExtra(Intent.EXTRA_TEXT);
         if (text == null || text.isEmpty()) return;
         pendingSharedText = text;
         deliverPendingShare();
     }
 
+    /**
+     * Reads the shared photo into memory as a base64 data URL up front,
+     * rather than handing the JS side the content:// URI itself — WebView's
+     * JS has no way to resolve a content:// URI (it isn't http(s) or a
+     * bundled asset), and the URI's read grant is only guaranteed to last
+     * for the lifetime of this intent, not until whenever the page gets
+     * around to asking for it. A phone photo is a few MB at most, well
+     * within what evaluateJavascript can carry as one string argument.
+     */
+    private String[] readSharedImage(Uri uri, String mimeType) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+
+            String base64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
+            String dataUrl = "data:" + mimeType + ";base64," + base64;
+            // The real filename isn't worth an extra ContentResolver query
+            // for — index.html only inspects the extension (falling back to
+            // the MIME type either way) to decide whether it can import a
+            // file, and shows this name only briefly in a toast.
+            String ext = mimeType.contains("png") ? "png" : "jpg";
+            return new String[]{ dataUrl, "shared-photo." + ext };
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void deliverPendingShare() {
-        if (!pageReady || pendingSharedText == null) return;
+        if (!pageReady) return;
+
+        if (pendingSharedImage != null) {
+            String[] image = pendingSharedImage;
+            pendingSharedImage = null;
+            web.evaluateJavascript("handleSharedImage(" + JSONObject.quote(image[0])
+                    + "," + JSONObject.quote(image[1]) + ")", null);
+            return;
+        }
+
+        if (pendingSharedText == null) return;
         String text = pendingSharedText;
         pendingSharedText = null;
         // JSONObject.quote wraps the string as a JSON string literal —
