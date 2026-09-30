@@ -943,6 +943,28 @@ function tokenize(text) {
   return tokens;
 }
 
+// TTS voices vary in how literally they vocalize punctuation — some say
+// "underscore" for every _ in a snake_case identifier, or "hyphen" for
+// every - in a kebab-case one, which reads as noise rather than a natural
+// pause (far more noticeable once code blocks started being read aloud).
+// Everything Unicode considers punctuation or a symbol is replaced with a
+// plain space before speech, except this small set a voice already turns
+// into a natural pause or intonation shift rather than reading by name.
+const SPEAKABLE_PUNCTUATION = new Set([
+  ".", ",", "!", "?", ";", ":", "'", "’", "‘", "\"", "“", "”",
+  "(", ")", "/", "…", "–", "—",
+]);
+
+/** Applied only to what's actually spoken (app.text, in load() below) —
+ *  never to a tree's rendered text or a token's own .text, so nothing
+ *  visible changes. One-for-one character substitution, never a deletion,
+ *  so it never shifts a character offset: every existing token start/end
+ *  and chunk charOffset — the entire TTS-sync system — stays exactly
+ *  valid against the result. */
+function stripNoisySymbols(text) {
+  return text.replace(/[\p{P}\p{S}]/gu, (ch) => (SPEAKABLE_PUNCTUATION.has(ch) ? ch : " "));
+}
+
 /** Largest token index whose start is <= charPos. Binary search. */
 function tokenAtChar(tokens, charPos) {
   let lo = 0, hi = tokens.length - 1, best = -1;
@@ -2494,6 +2516,7 @@ const app = {
       this.renderer.render(text, this.tokens);
     }
 
+    this.text = stripNoisySymbols(this.text);
     text = this.text;
     if (app.engine) {
       pendingAutoLang = detectScriptLang(text);
