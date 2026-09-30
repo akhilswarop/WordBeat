@@ -2464,9 +2464,11 @@ const el = {
   btnFollow: document.getElementById("btnFollow"),
 };
 
-/* Synthetic speech runs near 2.9 words/sec at rate 1.0. The clock in the
-   player is an estimate from word position, not a measured audio duration —
-   Web Speech never tells us how long an utterance will actually take. */
+/* A fallback assumption only — real voices vary far too widely in actual
+   pace (roughly 2-5+ words/sec depending on voice, language and engine)
+   for this to double as the displayed clock's rate the way it used to.
+   Used solely until enough real playback has happened to measure the
+   actual pace directly; see tickClock below. */
 const WORDS_PER_SECOND = 2.9;
 
 function fmtTime(seconds) {
@@ -2474,14 +2476,92 @@ function fmtTime(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+// Word-position bookkeeping (the progress bar, and how far into the
+// document the clock has to extrapolate from) stays event-driven, updated
+// only when a real word arrives. The displayed clock itself no longer is
+// — see startClock/stopClock/tickClock below.
+let lastProgress = { done: 0, total: 1 };
+
 function updateProgress(tokenIndex) {
   const total = app.tokens.length || 1;
   const done = Math.max(0, tokenIndex + 1);
   el.progressFill.style.width = `${(done / total) * 100}%`;
+  lastProgress = { done, total };
 
+  // tokenIndex < 0 is this app's own convention for "nothing spoken yet"
+  // — a fresh document load or an explicit Stop — so there is no real
+  // elapsed time left to keep, and the total needs to fall back to the
+  // fixed-rate guess again until real data exists for this document.
+  if (tokenIndex < 0) {
+    playbackElapsedMs = 0;
+    tickClock();
+  }
+}
+
+/* ---------------------------- player clock -------------------------- *
+ * The elapsed/total readout used to be derived purely from word
+ * position — done/wps and total/wps — which assumed every voice spoke at
+ * exactly WORDS_PER_SECOND. Real voices routinely don't (confirmed live:
+ * one voice measured over 5 words/sec, nearly double the assumption),
+ * which made the clock visibly run fast or slow against the actual
+ * audio, and because it only ever updated when a word boundary arrived,
+ * a long pause between chunks left it frozen rather than ticking.
+ *
+ * Elapsed now comes from a real wall-clock measurement, ticked on a
+ * plain interval so it advances smoothly regardless of how sparse word
+ * boundaries are. Total re-derives itself from the real pace observed
+ * so far (elapsed so far ÷ fraction of words done) once there is enough
+ * of it to trust, rather than ever assuming a fixed rate applies to this
+ * voice — which also means a rate change mid-read no longer has to be
+ * handled specially: whatever the actual rate was already shows up in
+ * the real elapsed measurement that total is extrapolated from.
+ * ---------------------------------------------------------------------- */
+let playbackElapsedMs = 0;      // accumulated real ms across every "playing" segment since this document loaded
+let playbackSegmentStart = 0;   // performance.now() when the current playing segment began
+let clockInterval = null;
+
+function currentElapsedMs() {
+  return app.engine?.state === "playing"
+    ? playbackElapsedMs + (performance.now() - playbackSegmentStart)
+    : playbackElapsedMs;
+}
+
+function tickClock() {
+  const elapsedSec = currentElapsedMs() / 1000;
+  el.tElapsed.textContent = fmtTime(elapsedSec);
+
+  const { done, total } = lastProgress;
   const wps = WORDS_PER_SECOND * (app.engine ? app.engine.rate : 1);
-  el.tElapsed.textContent = fmtTime(done / wps);
-  el.tTotal.textContent = fmtTime(total / wps);
+  // Extrapolating from real pace needs enough of it to not be noise —
+  // one word a quarter-second in would extrapolate wildly. Below that
+  // threshold the fixed-rate guess is still the better estimate.
+  const totalSec = (done >= 5 && elapsedSec >= 1.5)
+    ? elapsedSec * (total / done)
+    : total / wps;
+  el.tTotal.textContent = fmtTime(totalSec);
+}
+
+function startClock() {
+  playbackSegmentStart = performance.now();
+  if (clockInterval) return;
+  clockInterval = setInterval(tickClock, 250);
+}
+
+function stopClock() {
+  // Every speak() call — including the very first one ever, before
+  // startClock() has run even once — goes through stop() internally
+  // first, which reports "idle" the same as a genuine pause/stop does.
+  // Only accumulate if the clock was actually running: otherwise
+  // playbackSegmentStart is stale (still its initial 0 on that very
+  // first call), and performance.now() minus that would add the entire
+  // time since page load as bogus elapsed — confirmed live as the exact
+  // cause of a reported several-second overshoot on first play.
+  if (clockInterval) {
+    playbackElapsedMs += performance.now() - playbackSegmentStart;
+    clearInterval(clockInterval);
+    clockInterval = null;
+  }
+  tickClock();
 }
 
 const app = {
@@ -2595,6 +2675,12 @@ function setPlayLabel(state) {
   const label = playing ? "Pause" : state === "paused" ? "Resume" : "Play";
   el.play.title = `${label} (Space)`;
   el.play.setAttribute("aria-label", label);
+
+  // The engine's onStateChange — every play/pause/resume/stop passes
+  // through here, so it's the one place that needs to start or stop the
+  // player clock (see tickClock above) rather than each call site.
+  if (playing) startClock();
+  else stopClock();
 }
 
 /** Single entry point for play/pause/resume, shared by the button and Space. */
