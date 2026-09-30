@@ -2027,7 +2027,6 @@ class WebSpeechEngine {
     this._raf = null;
     this._estimateStart = 0;
     this._estimateTokens = null;
-    this._pausedAt = 0;
     // The exact absolute char position of the most recently spoken word —
     // see setRate/setVoice below for why this is tracked at word rather
     // than chunk granularity.
@@ -2137,40 +2136,30 @@ class WebSpeechEngine {
     if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
   }
 
+  /** Not synth.pause()/synth.resume(): that pair is a long-standing source
+   *  of playback silently getting stuck on real Chrome — resume() quite
+   *  often just doesn't resume the utterance, or resumes audio but never
+   *  fires another onboundary, leaving the highlight frozen at the paused
+   *  word even though this app's own state already says "playing" again
+   *  (confirmed as the cause of a live bug report: clicking a word — which
+   *  re-issues speech via seekToToken/speak() rather than going through
+   *  resume() — was the only thing that un-stuck it). Cancelling on pause
+   *  and re-issuing from the remembered word on resume sidesteps the
+   *  browser's resume path entirely; it's the same stop-and-reissue
+   *  approach AndroidTtsEngine already uses, since TextToSpeech has no
+   *  native pause either. */
   pause() {
     if (this.state !== "playing") return;
-    this.synth.pause();
-    this._pausedAt = performance.now();
+    this.generation++;              // invalidate every in-flight handler, same as stop()
     this._stopEstimator();
     this.onBuffering?.(false);
+    try { this.synth.cancel(); } catch (_) {}
     this._setState("paused");
   }
 
   resume() {
     if (this.state !== "paused") return;
-    // Shift the estimator's origin so paused time isn't counted as spoken.
-    if (this._estimateStart) this._estimateStart += performance.now() - this._pausedAt;
-    this.synth.resume();
-    this._setState("playing");
-    if (this._estimateStart && !this._raf) {
-      this._startEstimatorResume();
-    }
-  }
-
-  _startEstimatorResume() {
-    const gen = this.generation;
-    const tokens = this.tokensByChunk[this.cursor] || [];
-    if (!tokens.length) return;
-    const wps = 2.9 * this.rate;
-    const step = () => {
-      if (gen !== this.generation || this.state !== "playing") return;
-      const elapsed = (performance.now() - this._estimateStart) / 1000;
-      const i = Math.min(tokens.length - 1, Math.floor(elapsed * wps));
-      this._lastChar = tokens[i].start;
-      this.onWord(this._lastChar);
-      this._raf = requestAnimationFrame(step);
-    };
-    this._raf = requestAnimationFrame(step);
+    this._resumeFrom(this._lastChar);
   }
 
   stop() {
