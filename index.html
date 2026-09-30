@@ -24,6 +24,10 @@
     --chip: #1f2430;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
     --shadow-lg: 0 4px 12px rgba(0,0,0,.45), 0 16px 40px rgba(0,0,0,.35);
+    --syn-keyword: #ff9d7a;
+    --syn-string: #a8d68a;
+    --syn-number: #e8c56b;
+    --syn-title: #7fc4ff;
   }
   :root[data-theme="light"] {
     --bg: #eef0f6;
@@ -40,6 +44,10 @@
     --chip: #f3f4f9;
     --shadow-sm: 0 1px 2px rgba(20,25,50,.06);
     --shadow-lg: 0 4px 12px rgba(20,25,50,.08), 0 16px 40px rgba(20,25,50,.10);
+    --syn-keyword: #c0492a;
+    --syn-string: #2f7d3f;
+    --syn-number: #a3690e;
+    --syn-title: #1a5fb4;
   }
 
   * { box-sizing: border-box; }
@@ -312,6 +320,30 @@
     overflow-x: auto; font-size: .78em; line-height: 1.6;
   }
   #reader.rich pre code { background: none; padding: 0; font-size: 1em; }
+  /* highlight.js's own class names, mapped onto this app's theme tokens
+     rather than importing one of its prebuilt themes — keeps code colors
+     in step with light/dark instead of clashing with whichever theme
+     shipped its own hardcoded palette. Deliberately a handful of buckets,
+     not every class highlight.js emits: distinguishing keyword/string/
+     number/name-ish tokens from plain text reads fine without chasing
+     every language's own fine-grained token types. */
+  #reader.rich .hljs-keyword, #reader.rich .hljs-literal,
+  #reader.rich .hljs-selector-tag, #reader.rich .hljs-section,
+  #reader.rich .hljs-link { color: var(--syn-keyword); }
+  #reader.rich .hljs-string, #reader.rich .hljs-attr,
+  #reader.rich .hljs-symbol, #reader.rich .hljs-bullet,
+  #reader.rich .hljs-addition, #reader.rich .hljs-template-tag,
+  #reader.rich .hljs-template-variable { color: var(--syn-string); }
+  #reader.rich .hljs-number, #reader.rich .hljs-regexp { color: var(--syn-number); }
+  #reader.rich .hljs-title, #reader.rich .hljs-name,
+  #reader.rich .hljs-type, #reader.rich .hljs-built_in,
+  #reader.rich .hljs-builtin-name, #reader.rich .hljs-class .hljs-title {
+    color: var(--syn-title);
+  }
+  #reader.rich .hljs-comment, #reader.rich .hljs-quote,
+  #reader.rich .hljs-deletion, #reader.rich .hljs-meta { color: var(--muted); }
+  #reader.rich .hljs-emphasis { font-style: italic; }
+  #reader.rich .hljs-strong { font-weight: 700; }
   #reader.rich img {
     display: block; max-width: 100%; height: auto;
     border-radius: 10px; margin: 1.2em 0;
@@ -1281,6 +1313,50 @@ function loadMarked() {
   return markedPromise;
 }
 
+const HLJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js";
+let hljsPromise = null;
+
+/** Fetched only the first time a document actually has a fenced code block
+ *  — most Markdown/EPUB/DOCX content never does — mirroring loadMarked
+ *  above. highlight.js's own auto-detection is never used (see
+ *  highlightCodeBlocks): a lone ``` fence with no language, which is
+ *  exactly the shape an ASCII diagram takes once asciiArtToCodeBlocks
+ *  fences it, would otherwise get guessed at as some programming language
+ *  and mangled. */
+function loadHighlightJs() {
+  if (!hljsPromise) {
+    hljsPromise = new Promise((resolve, reject) => {
+      if (window.hljs) return resolve(window.hljs);
+      const script = document.createElement("script");
+      script.src = HLJS_URL;
+      script.onload = () => resolve(window.hljs);
+      script.onerror = () => reject(new Error("Failed to fetch highlight.js"));
+      document.head.appendChild(script);
+    }).catch((err) => { hljsPromise = null; throw err; });
+  }
+  return hljsPromise;
+}
+
+/** Highlights every fenced code block in `root` that named a real language
+ *  (```js, not a bare ```), in place — called after sanitizeHtmlDoc has
+ *  already produced the tree and before buildFromDom tokenizes it, so the
+ *  <span class="hljs-*"> wrappers highlight.js adds get word-spans nested
+ *  inside them by the exact same walk that already handles <strong>/<em>,
+ *  no changes needed there. A no-op, network-free, if nothing in the
+ *  document is actually tagged with a language. */
+async function highlightCodeBlocks(root) {
+  const blocks = [...root.querySelectorAll("pre > code[class^='language-']")];
+  if (!blocks.length) return;
+  const hljs = await loadHighlightJs();
+  for (const block of blocks) {
+    try { hljs.highlightElement(block); } catch (_) {
+      // An unrecognised language name (highlight.js only ships a curated
+      // set) throws rather than falling back — leaving the block as plain
+      // text is a better failure mode than losing the rest of the document.
+    }
+  }
+}
+
 /**
  * An un-indented fenced code block between numbered steps is common in
  * AI-generated Markdown (Copilot, ChatGPT) but, under the CommonMark spec,
@@ -1611,6 +1687,18 @@ function sanitizeHtmlDoc(doc, resolveImage) {
         }
         return frag;
       }
+    }
+
+    // The one attribute kept anywhere in this whole function: marked tags
+    // a fenced code block's <code> as class="language-js" (etc.), which
+    // highlightCodeBlocks (below) needs to know what to highlight. Not a
+    // general class passthrough — only a name shaped exactly like marked's
+    // own convention survives, so this can't become a hook for arbitrary
+    // author-supplied CSS classes.
+    if (tag === "code") {
+      const cls = node.getAttribute("class") || "";
+      const lang = cls.match(/(?:^|\s)language-([\w-]+)/);
+      if (lang) out.className = "language-" + lang[1];
     }
 
     for (const child of node.childNodes) {
@@ -3813,6 +3901,7 @@ async function loadRaw(raw, label, { forceMarkdown = false, cleanable = true, no
   app.engine?.stop();
   app.renderer.clear();
   const doc = await prepareDoc(raw, { forceMarkdown, cleanable, html });
+  if (doc.tree) await highlightCodeBlocks(doc.tree);
   app.load(doc.text, doc.tree);
   setSource(label);
   toast(`Loaded ${label}${note}`);
@@ -3831,8 +3920,10 @@ function exitEpubMode() {
 /** Parses and displays one chapter of the currently loaded EPUB. Chapters
  *  are re-parsed from their stored HTML each time rather than cached as a
  *  mutated DOM, the same way Markdown re-renders from source text on every
- *  load — buildFromDom mutates whatever tree it is given. */
-function openEpubChapter(index) {
+ *  load — buildFromDom mutates whatever tree it is given. Async only for
+ *  highlightCodeBlocks; callers fire this and move on rather than await
+ *  it — a chapter switch doesn't need to block on anything. */
+async function openEpubChapter(index) {
   const book = app.epub;
   const chapter = book.chapters[index];
   if (!chapter) return;
@@ -3843,6 +3934,7 @@ function openEpubChapter(index) {
   app.renderer.clear();
 
   const root = parseEpubChapter(chapter.html, book.resources);
+  await highlightCodeBlocks(root);
   app.load(null, root);
 
   // The chapter dropdown already shows which chapter this is, and the
