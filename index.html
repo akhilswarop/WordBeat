@@ -187,8 +187,9 @@ try {
     width: 34px; height: 34px; border-radius: 9px;
     display: inline-flex; align-items: center; justify-content: center;
     font: inherit; font-size: 13px; font-weight: 600;
-    transition: background .12s, color .12s;
+    transition: background .12s, color .12s, transform .1s;
   }
+  .ic:active { transform: scale(.92); }
   .ic:hover { background: var(--chip); color: var(--text); }
   /* The pressed state is also a bar under the icon, so it does not rest on
      colour alone. */
@@ -373,6 +374,7 @@ try {
     width: 16px; height: 16px; border-radius: 50%;
     background: var(--muted); transition: transform .15s, background .15s;
   }
+  .sp-switch + .sp-switch { border-top: 0; margin-top: 0; padding-top: 6px; }
   .sp-switch[aria-checked="true"] .sp-track { background: var(--accent); }
   .sp-switch[aria-checked="true"] .sp-track::after {
     transform: translateX(16px); background: var(--accent-ink);
@@ -400,7 +402,7 @@ try {
     --measure: calc(var(--reader-size) * var(--measure-em) + 120px);
   }
 
-  main { padding: 24px clamp(12px, 3vw, 28px) 190px; }
+  main { padding: 24px clamp(12px, 3vw, 28px) calc(var(--player-h, 150px) + 40px + var(--safe-bottom)); }
 
   .paper {
     max-width: var(--measure); margin: 0 auto;
@@ -602,10 +604,35 @@ try {
     left: 50%; bottom: calc(26px + var(--safe-bottom)); transform: translateX(-50%);
     width: min(520px, calc(100vw - 32px));
     background: var(--paper);
+    border: 1px solid var(--line);
     border-radius: 18px;
     box-shadow: var(--shadow-lg);
     padding: 14px 18px 16px;
+    /* Horizontal swipes on the card skip sentences; vertical ones still scroll. */
+    touch-action: pan-y;
   }
+  /* A translucent card lets the text show through where the browser can blur
+     what is behind it; elsewhere the solid fill above stays. */
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .player {
+      background: color-mix(in srgb, var(--paper) 80%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.15);
+      backdrop-filter: blur(14px) saturate(1.15);
+    }
+  }
+  /* While reading, the card shrinks to a pill so the text keeps the screen. */
+  .player.mini {
+    width: auto; max-width: calc(100vw - 32px);
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 18px 5px 5px; border-radius: 40px; cursor: pointer;
+  }
+  .player.mini .p-bar, .player.mini #timingMode,
+  .player.mini .p-controls > :not(.play-btn) { display: none; }
+  .player.mini .p-controls { order: -1; margin: 0; min-height: 0; }
+  .player.mini .p-times { margin: 0; gap: 6px; justify-content: flex-start; }
+  .player.mini #tTotal::before { content: "/ "; }
+  .player.mini .play-btn { width: 40px; height: 40px; }
+
 
   .p-bar {
     position: relative;
@@ -647,6 +674,21 @@ try {
     box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 38%, transparent);
     transition: transform .1s, filter .12s;
   }
+  /* Progress ring: the same position the seek bar shows, around the button.
+     pathLength="100" lets the dash length be a plain percentage. */
+  .play-ring {
+    position: absolute; left: -6px; top: -6px;
+    width: calc(100% + 12px); height: calc(100% + 12px);
+    transform: rotate(-90deg); pointer-events: none;
+  }
+  .play-ring circle { fill: none; stroke-width: 2.5; }
+  .play-ring-track { stroke: var(--line); }
+  .play-ring-arc {
+    stroke: var(--accent); stroke-linecap: round;
+    stroke-dasharray: 0 100; opacity: 0;
+    transition: stroke-dasharray .18s linear;
+  }
+  .play-btn.loading .play-ring { opacity: 0; }
   .play-btn:hover { filter: brightness(1.07); }
   .play-btn:active { transform: scale(.94); }
   .play-btn svg { display: block; }
@@ -715,6 +757,24 @@ try {
     border: 1px solid var(--line); white-space: nowrap;
   }
   .pill.warn { border-color: var(--accent); color: var(--accent); }
+
+  /* Landscape phones and short windows: one row, so the page keeps its height. */
+  @media (max-height: 480px) {
+    .player {
+      width: min(760px, calc(100vw - 24px));
+      display: grid; grid-template-columns: auto 1fr;
+      grid-template-areas: "ctl bar" "ctl times";
+      column-gap: 14px; align-items: center;
+      padding: 6px 14px; bottom: calc(8px + var(--safe-bottom));
+    }
+    .p-controls { grid-area: ctl; margin: 0; min-height: 0; gap: 6px; }
+    .p-bar { grid-area: bar; }
+    .p-times { grid-area: times; margin-top: 4px; }
+    .dial { position: relative; right: auto; top: auto; transform: none; margin-left: 6px; }
+    .play-btn { width: 44px; height: 44px; }
+    #timingMode { display: none; }
+    .player.mini { display: flex; }
+  }
 
   /* --------------------------- overlays ---------------------------- */
 
@@ -900,7 +960,7 @@ try {
   }
 
   @media (max-width: 640px) {
-    main { padding: 0 0 190px; }
+    main { padding: 0 0 calc(var(--player-h, 150px) + 40px + var(--safe-bottom)); }
     .paper {
       max-width: none;
       border-radius: 0;
@@ -1067,6 +1127,7 @@ try {
     </button>
 
     <button class="play-btn" id="btnPlay" title="Play (Space)" aria-label="Play">
+      <svg class="play-ring" viewBox="0 0 66 66" aria-hidden="true"><circle class="play-ring-track" cx="33" cy="33" r="31" pathLength="100"/><circle class="play-ring-arc" id="playRingArc" cx="33" cy="33" r="31" pathLength="100"/></svg>
       <svg id="iconPlay" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M8.5 5.6v12.8a1 1 0 0 0 1.52.86l10.2-6.4a1 1 0 0 0 0-1.72L10.02 4.74A1 1 0 0 0 8.5 5.6z" fill="currentColor"/></svg>
       <svg id="iconPause" class="hidden" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="7" y="5" width="4" height="14" rx="1.4" fill="currentColor"/><rect x="13" y="5" width="4" height="14" rx="1.4" fill="currentColor"/></svg>
     </button>
@@ -1141,6 +1202,9 @@ try {
 
   <button type="button" class="sp-switch" id="spFocus" role="switch" aria-checked="false">
     <span>Focus mode</span><kbd>F</kbd><span class="sp-track" aria-hidden="true"></span>
+  </button>
+  <button type="button" class="sp-switch" id="spMini" role="switch" aria-checked="true">
+    <span>Shrink player while reading</span><span class="sp-track" aria-hidden="true"></span>
   </button>
 </div>
 <div class="scrim hidden" id="scrim"></div>
@@ -1397,6 +1461,9 @@ function buildSentences(text, tokens) {
  * the rendered document is character-identical to the source.
  * ------------------------------------------------------------------ */
 
+/** Space kept between the spoken word and the player when following along. */
+const FOLLOW_CLEARANCE_PX = 24;
+
 class Renderer {
   constructor(el) {
     this.el = el;
@@ -1500,7 +1567,10 @@ class Renderer {
   _follow(span) {
     const r = span.getBoundingClientRect();
     const top = window.innerHeight * 0.25;
-    const bottom = window.innerHeight * 0.68;
+    // The lower edge stops above the player, however tall it currently is.
+    const dock = document.querySelector(".player");
+    const covered = dock ? window.innerHeight - dock.getBoundingClientRect().top : 0;
+    const bottom = Math.max(top + 60, Math.min(window.innerHeight * 0.68, window.innerHeight - covered - FOLLOW_CLEARANCE_PX));
     if (r.top < top || r.bottom > bottom) {
       // Not span.scrollIntoView(): with no `inline` option it defaults to
       // "nearest", which also drags any horizontally-scrollable ancestor
@@ -1509,7 +1579,8 @@ class Renderer {
       // start off-screen mid-read. This only ever needs to manage the
       // page's own vertical position, so it scrolls the window directly
       // and leaves every other scroll container untouched.
-      const targetTop = window.scrollY + r.top + r.height / 2 - window.innerHeight / 2;
+      const center = Math.min(window.innerHeight / 2, bottom - 40);
+      const targetTop = window.scrollY + r.top + r.height / 2 - center;
       const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
       window.scrollTo({ top: targetTop, behavior: reduceMotion ? "auto" : "smooth" });
     }
@@ -2719,6 +2790,7 @@ const el = {
   iconPlay: document.getElementById("iconPlay"),
   iconPause: document.getElementById("iconPause"),
   progressFill: document.getElementById("progressFill"),
+  playRingArc: document.getElementById("playRingArc"),
   timingMode: document.getElementById("timingMode"),
   unsupported: document.getElementById("unsupported"),
   back: document.getElementById("btnBack"),
@@ -2811,6 +2883,8 @@ function updateProgress(tokenIndex) {
   const done = Math.max(0, tokenIndex + 1);
   const percent = (done / total) * 100;
   el.progressFill.style.width = `${percent}%`;
+  el.playRingArc.style.strokeDasharray = `${percent} 100`;
+  el.playRingArc.style.opacity = percent > 0 ? "1" : "0";
   el.seekBar.setAttribute("aria-valuenow", String(Math.round(percent)));
   playbackClock.setProgress(done, total);
 }
@@ -2922,6 +2996,253 @@ const app = {
   },
 };
 
+/* --- player: shrinking and swiping ---
+ * The card shrinks to a pill after a few idle seconds of playback and grows
+ * back on a tap, on keyboard focus, or when playback stops. A horizontal
+ * swipe on the card skips a sentence. */
+const PLAYER_IDLE_MS = 5000;
+const SWIPE_MIN_PX = 56;
+const SWIPE_MAX_OFF_AXIS_PX = 36;
+const SWIPE_MAX_MS = 700;
+const playerDock = document.querySelector(".player");
+
+/** Runs setMini(true) once delayMs passes without another schedule() call. */
+function createShrinkScheduler({ delayMs, setMini, canShrink = () => true, timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (handle) => clearTimeout(handle) } }) {
+  let handle = null;
+  const cancel = () => {
+    if (handle !== null) timers.clear(handle);
+    handle = null;
+  };
+  return {
+    cancel,
+    expand() { cancel(); setMini(false); },
+    schedule() {
+      cancel();
+      handle = timers.set(() => { handle = null; if (canShrink()) setMini(true); }, delayMs);
+    },
+  };
+}
+
+/** -1 (swipe right: back), 1 (swipe left: forward) or 0 when the gesture is not a swipe. */
+function swipeDirection(start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (end.t - start.t > SWIPE_MAX_MS) return 0;
+  if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dy) > SWIPE_MAX_OFF_AXIS_PX) return 0;
+  return dx < 0 ? 1 : -1;
+}
+
+function isPlayingNow() {
+  return app.engine?.state === "playing";
+}
+
+const playerShrinker = createShrinkScheduler({
+  delayMs: PLAYER_IDLE_MS,
+  setMini: (mini) => playerDock.classList.toggle("mini", mini),
+  // Keyboard focus inside the card means someone is using it: leave it open.
+  canShrink: () => prefs.miniPlayer && isPlayingNow() && !playerDock.querySelector(":focus-visible"),
+});
+
+/** Re-evaluates shrinking after playback state or the preference changes. */
+function syncPlayerShrink() {
+  if (prefs.miniPlayer && isPlayingNow()) playerShrinker.schedule();
+  else playerShrinker.expand();
+}
+
+function expandPlayer() {
+  playerShrinker.expand();
+  syncPlayerShrink();
+}
+
+playerDock.addEventListener("click", (e) => {
+  if (playerDock.classList.contains("mini") && !e.target.closest(".play-btn")) expandPlayer();
+});
+playerDock.addEventListener("focusin", (e) => {
+  if (playerDock.classList.contains("mini") && e.target.matches(":focus-visible")) expandPlayer();
+});
+// Any use of the open card postpones shrinking.
+for (const type of ["pointerdown", "keydown", "wheel"]) {
+  playerDock.addEventListener(type, () => {
+    if (prefs.miniPlayer && isPlayingNow() && !playerDock.classList.contains("mini")) playerShrinker.schedule();
+  }, { passive: true });
+}
+
+let swipeStart = null;
+playerDock.addEventListener("pointerdown", (e) => {
+  swipeStart = e.target.closest("button, .p-bar, .dial") ? null : { x: e.clientX, y: e.clientY, t: performance.now() };
+});
+playerDock.addEventListener("pointerup", (e) => {
+  if (!swipeStart) return;
+  const direction = swipeDirection(swipeStart, { x: e.clientX, y: e.clientY, t: performance.now() });
+  swipeStart = null;
+  if (direction) skipSentence(direction);
+});
+playerDock.addEventListener("pointercancel", () => { swipeStart = null; });
+
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty("--player-h", `${Math.ceil(playerDock.getBoundingClientRect().height)}px`);
+  }).observe(playerDock);
+}
+
+/* --- reading preferences ---
+ * One saved object drives theme, font, size, spacing, width and focus mode.
+ * normalizePrefs() is the single gate: anything stored or passed in that is
+ * not a known value falls back to the default, so a corrupt entry can never
+ * leave the reader unreadable. */
+const PREFS_KEY = "wordbeat.prefs.v1";
+const THEME_CHOICES = ["auto", "dark", "light", "sepia", "oled"];
+const FONT_STACKS = {
+  serif: 'ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif',
+  sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+  readable: 'Verdana, Tahoma, "Segoe UI", ui-sans-serif, sans-serif',
+};
+const LINE_SPACINGS = { snug: 1.6, normal: 1.95, airy: 2.3 };
+const MEASURES_EM = { narrow: 25, medium: 30, wide: 36 };
+const READER_SIZE_MIN = 16;
+const READER_SIZE_MAX = 30;
+const THEME_BAR_COLORS = { dark: "#101218", light: "#eef0f6", sepia: "#ece0c8", oled: "#000000" };
+const LIGHT_THEMES = ["light", "sepia"];
+const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true };
+
+/** "auto" follows the system; every other choice is itself the theme. */
+function resolveTheme(choice, systemPrefersLight) {
+  if (choice === "auto") return systemPrefersLight ? "light" : "dark";
+  return choice;
+}
+
+function normalizePrefs(raw) {
+  let source = raw;
+  if (typeof raw === "string") {
+    try { source = JSON.parse(raw); } catch (_) { source = null; }
+  }
+  if (!source || typeof source !== "object") source = {};
+
+  const oneOf = (allowed, value, fallback) => (allowed.includes(value) ? value : fallback);
+  const size = typeof source.size === "number" && Number.isFinite(source.size)
+    ? Math.min(READER_SIZE_MAX, Math.max(READER_SIZE_MIN, Math.round(source.size)))
+    : DEFAULT_PREFS.size;
+  return {
+    theme: oneOf(THEME_CHOICES, source.theme, DEFAULT_PREFS.theme),
+    font: oneOf(Object.keys(FONT_STACKS), source.font, DEFAULT_PREFS.font),
+    size,
+    spacing: oneOf(Object.keys(LINE_SPACINGS), source.spacing, DEFAULT_PREFS.spacing),
+    width: oneOf(Object.keys(MEASURES_EM), source.width, DEFAULT_PREFS.width),
+    focus: source.focus === true,
+    miniPlayer: source.miniPlayer !== false,
+  };
+}
+
+let prefs = normalizePrefs(readStored(PREFS_KEY));
+const settingsPanel = document.getElementById("settingsPanel");
+const settingsScrim = document.getElementById("scrim");
+const settingsSize = document.getElementById("spSize");
+const settingsSizeValue = document.getElementById("spSizeVal");
+const settingsFocus = document.getElementById("spFocus");
+const settingsMini = document.getElementById("spMini");
+const systemLightQuery = matchMedia("(prefers-color-scheme: light)");
+
+function applyPrefs() {
+  const root = document.documentElement;
+  const theme = resolveTheme(prefs.theme, systemLightQuery.matches);
+  root.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_BAR_COLORS[theme]);
+  tellNativeShellBarStyle(LIGHT_THEMES.includes(theme));
+
+  root.style.setProperty("--reader-font", FONT_STACKS[prefs.font]);
+  root.style.setProperty("--reader-size", `${prefs.size}px`);
+  root.style.setProperty("--reader-leading", String(LINE_SPACINGS[prefs.spacing]));
+  root.style.setProperty("--measure-em", String(MEASURES_EM[prefs.width]));
+  root.classList.toggle("focus-mode", prefs.focus);
+  syncSettingsPanel();
+  syncPlayerShrink();
+}
+
+/** The Android shell owns the status-bar icon colour; the browser has no equivalent. */
+function tellNativeShellBarStyle(lightBackground) {
+  try { window.AndroidTTS?.setSystemBarsLight?.(lightBackground); } catch (error) { console.debug("system bar style not applied", error); }
+}
+
+function updatePref(change) {
+  prefs = normalizePrefs({ ...prefs, ...change });
+  writeStored(PREFS_KEY, JSON.stringify(prefs));
+  applyPrefs();
+}
+
+function syncSettingsPanel() {
+  for (const button of settingsPanel.querySelectorAll("[data-pref]")) {
+    button.setAttribute("aria-checked", String(String(prefs[button.dataset.pref]) === button.dataset.value));
+  }
+  settingsSize.value = String(prefs.size);
+  settingsSizeValue.textContent = `${prefs.size} px`;
+  settingsFocus.setAttribute("aria-checked", String(prefs.focus));
+  settingsMini.setAttribute("aria-checked", String(prefs.miniPlayer));
+}
+
+function settingsOpen() {
+  return !settingsPanel.classList.contains("hidden");
+}
+
+function openSettings() {
+  closeTools();
+  closeVoicePanel();
+  settingsPanel.classList.remove("hidden");
+  settingsScrim.classList.remove("hidden");
+  el.btnFont.setAttribute("aria-expanded", "true");
+  settingsPanel.querySelector('[role="radio"][aria-checked="true"]')?.focus();
+}
+
+function closeSettings() {
+  if (!settingsOpen()) return;
+  settingsPanel.classList.add("hidden");
+  settingsScrim.classList.add("hidden");
+  el.btnFont.setAttribute("aria-expanded", "false");
+  (el.btnFont.offsetParent ? el.btnFont : btnMore).focus();
+}
+
+el.btnFont.addEventListener("click", () => (settingsOpen() ? closeSettings() : openSettings()));
+document.getElementById("settingsClose").addEventListener("click", closeSettings);
+document.addEventListener("click", (e) => {
+  if (settingsOpen() && !settingsPanel.contains(e.target) && !el.btnFont.contains(e.target)) closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSettings();
+});
+
+settingsPanel.addEventListener("click", (e) => {
+  const option = e.target.closest("[data-pref]");
+  if (option) updatePref({ [option.dataset.pref]: option.dataset.value });
+});
+settingsSize.addEventListener("input", () => updatePref({ size: Number(settingsSize.value) }));
+settingsFocus.addEventListener("click", () => updatePref({ focus: !prefs.focus }));
+settingsMini.addEventListener("click", () => updatePref({ miniPlayer: !prefs.miniPlayer }));
+
+// Radio groups move with the arrow keys, like native radios.
+settingsPanel.addEventListener("keydown", (e) => {
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  const current = e.target.closest('[role="radio"]');
+  if (!step || !current) return;
+  const group = [...current.parentElement.querySelectorAll('[role="radio"]')];
+  const next = group[(group.indexOf(current) + step + group.length) % group.length];
+  next.focus();
+  next.click();
+  e.preventDefault();
+});
+
+systemLightQuery.addEventListener?.("change", () => { if (prefs.theme === "auto") applyPrefs(); });
+
+/* F toggles focus mode anywhere the letter is not being typed. */
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey || e.key.toLowerCase() !== "f") return;
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(a.tagName))) return;
+  e.preventDefault();
+  updatePref({ focus: !prefs.focus });
+  toast(prefs.focus ? "Focus mode on" : "Focus mode off");
+});
+
+applyPrefs();
+
 /* ---- wiring ---- */
 
 function renderPlayButton(state) {
@@ -2940,6 +3261,7 @@ function onPlaybackStateChanged(state) {
   renderPlayButton(state);
   if (state === "playing") playbackClock.start();
   else playbackClock.stop();
+  syncPlayerShrink();
 }
 
 /** Single entry point for play/pause/resume, shared by the button and Space. */
@@ -5113,159 +5435,6 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTools();
 });
-
-/* --- reading preferences ---
- * One saved object drives theme, font, size, spacing, width and focus mode.
- * normalizePrefs() is the single gate: anything stored or passed in that is
- * not a known value falls back to the default, so a corrupt entry can never
- * leave the reader unreadable. */
-const PREFS_KEY = "wordbeat.prefs.v1";
-const THEME_CHOICES = ["auto", "dark", "light", "sepia", "oled"];
-const FONT_STACKS = {
-  serif: 'ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif',
-  sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
-  readable: 'Verdana, Tahoma, "Segoe UI", ui-sans-serif, sans-serif',
-};
-const LINE_SPACINGS = { snug: 1.6, normal: 1.95, airy: 2.3 };
-const MEASURES_EM = { narrow: 25, medium: 30, wide: 36 };
-const READER_SIZE_MIN = 16;
-const READER_SIZE_MAX = 30;
-const THEME_BAR_COLORS = { dark: "#101218", light: "#eef0f6", sepia: "#ece0c8", oled: "#000000" };
-const LIGHT_THEMES = ["light", "sepia"];
-const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false };
-
-/** "auto" follows the system; every other choice is itself the theme. */
-function resolveTheme(choice, systemPrefersLight) {
-  if (choice === "auto") return systemPrefersLight ? "light" : "dark";
-  return choice;
-}
-
-function normalizePrefs(raw) {
-  let source = raw;
-  if (typeof raw === "string") {
-    try { source = JSON.parse(raw); } catch (_) { source = null; }
-  }
-  if (!source || typeof source !== "object") source = {};
-
-  const oneOf = (allowed, value, fallback) => (allowed.includes(value) ? value : fallback);
-  const size = typeof source.size === "number" && Number.isFinite(source.size)
-    ? Math.min(READER_SIZE_MAX, Math.max(READER_SIZE_MIN, Math.round(source.size)))
-    : DEFAULT_PREFS.size;
-  return {
-    theme: oneOf(THEME_CHOICES, source.theme, DEFAULT_PREFS.theme),
-    font: oneOf(Object.keys(FONT_STACKS), source.font, DEFAULT_PREFS.font),
-    size,
-    spacing: oneOf(Object.keys(LINE_SPACINGS), source.spacing, DEFAULT_PREFS.spacing),
-    width: oneOf(Object.keys(MEASURES_EM), source.width, DEFAULT_PREFS.width),
-    focus: source.focus === true,
-  };
-}
-
-let prefs = normalizePrefs(readStored(PREFS_KEY));
-const settingsPanel = document.getElementById("settingsPanel");
-const settingsScrim = document.getElementById("scrim");
-const settingsSize = document.getElementById("spSize");
-const settingsSizeValue = document.getElementById("spSizeVal");
-const settingsFocus = document.getElementById("spFocus");
-const systemLightQuery = matchMedia("(prefers-color-scheme: light)");
-
-function applyPrefs() {
-  const root = document.documentElement;
-  const theme = resolveTheme(prefs.theme, systemLightQuery.matches);
-  root.dataset.theme = theme;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_BAR_COLORS[theme]);
-  tellNativeShellBarStyle(LIGHT_THEMES.includes(theme));
-
-  root.style.setProperty("--reader-font", FONT_STACKS[prefs.font]);
-  root.style.setProperty("--reader-size", `${prefs.size}px`);
-  root.style.setProperty("--reader-leading", String(LINE_SPACINGS[prefs.spacing]));
-  root.style.setProperty("--measure-em", String(MEASURES_EM[prefs.width]));
-  root.classList.toggle("focus-mode", prefs.focus);
-  syncSettingsPanel();
-}
-
-/** The Android shell owns the status-bar icon colour; the browser has no equivalent. */
-function tellNativeShellBarStyle(lightBackground) {
-  try { window.AndroidTTS?.setSystemBarsLight?.(lightBackground); } catch (error) { console.debug("system bar style not applied", error); }
-}
-
-function updatePref(change) {
-  prefs = normalizePrefs({ ...prefs, ...change });
-  writeStored(PREFS_KEY, JSON.stringify(prefs));
-  applyPrefs();
-}
-
-function syncSettingsPanel() {
-  for (const button of settingsPanel.querySelectorAll("[data-pref]")) {
-    button.setAttribute("aria-checked", String(String(prefs[button.dataset.pref]) === button.dataset.value));
-  }
-  settingsSize.value = String(prefs.size);
-  settingsSizeValue.textContent = `${prefs.size} px`;
-  settingsFocus.setAttribute("aria-checked", String(prefs.focus));
-}
-
-function settingsOpen() {
-  return !settingsPanel.classList.contains("hidden");
-}
-
-function openSettings() {
-  closeTools();
-  closeVoicePanel();
-  settingsPanel.classList.remove("hidden");
-  settingsScrim.classList.remove("hidden");
-  el.btnFont.setAttribute("aria-expanded", "true");
-  settingsPanel.querySelector('[role="radio"][aria-checked="true"]')?.focus();
-}
-
-function closeSettings() {
-  if (!settingsOpen()) return;
-  settingsPanel.classList.add("hidden");
-  settingsScrim.classList.add("hidden");
-  el.btnFont.setAttribute("aria-expanded", "false");
-  (el.btnFont.offsetParent ? el.btnFont : btnMore).focus();
-}
-
-el.btnFont.addEventListener("click", () => (settingsOpen() ? closeSettings() : openSettings()));
-document.getElementById("settingsClose").addEventListener("click", closeSettings);
-document.addEventListener("click", (e) => {
-  if (settingsOpen() && !settingsPanel.contains(e.target) && !el.btnFont.contains(e.target)) closeSettings();
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeSettings();
-});
-
-settingsPanel.addEventListener("click", (e) => {
-  const option = e.target.closest("[data-pref]");
-  if (option) updatePref({ [option.dataset.pref]: option.dataset.value });
-});
-settingsSize.addEventListener("input", () => updatePref({ size: Number(settingsSize.value) }));
-settingsFocus.addEventListener("click", () => updatePref({ focus: !prefs.focus }));
-
-// Radio groups move with the arrow keys, like native radios.
-settingsPanel.addEventListener("keydown", (e) => {
-  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-  const current = e.target.closest('[role="radio"]');
-  if (!step || !current) return;
-  const group = [...current.parentElement.querySelectorAll('[role="radio"]')];
-  const next = group[(group.indexOf(current) + step + group.length) % group.length];
-  next.focus();
-  next.click();
-  e.preventDefault();
-});
-
-systemLightQuery.addEventListener?.("change", () => { if (prefs.theme === "auto") applyPrefs(); });
-
-/* F toggles focus mode anywhere the letter is not being typed. */
-document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.altKey || e.metaKey || e.key.toLowerCase() !== "f") return;
-  const a = document.activeElement;
-  if (a && (a.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(a.tagName))) return;
-  e.preventDefault();
-  updatePref({ focus: !prefs.focus });
-  toast(prefs.focus ? "Focus mode on" : "Focus mode off");
-});
-
-applyPrefs();
 
 /* --- speed --- *
  * The slider moves over ladder indices rather than raw rates, so every

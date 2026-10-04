@@ -303,7 +303,7 @@ describe("markdown helpers", () => {
 });
 
 describe("normalizePrefs", () => {
-  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false };
+  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true };
 
   it("returns the defaults for nothing, garbage or a non-object", () => {
     assert.deepEqual(plain(app.normalizePrefs(null)), defaults);
@@ -312,7 +312,7 @@ describe("normalizePrefs", () => {
   });
 
   it("accepts a JSON string or an object", () => {
-    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true };
+    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true, miniPlayer: false };
     assert.deepEqual(plain(app.normalizePrefs(JSON.stringify(saved))), saved);
     assert.deepEqual(plain(app.normalizePrefs(saved)), saved);
   });
@@ -348,5 +348,77 @@ describe("resolveTheme", () => {
   it("returns every other choice unchanged", () => {
     assert.equal(app.resolveTheme("sepia", true), "sepia");
     assert.equal(app.resolveTheme("oled", false), "oled");
+  });
+});
+
+describe("createShrinkScheduler", () => {
+  // A fake clock: timers run only when the test says so.
+  function makeScheduler({ canShrink = () => true } = {}) {
+    const calls = [];
+    const pending = new Map();
+    let nextId = 1;
+    const timers = {
+      set: (fn, ms) => { pending.set(nextId, { fn, ms }); return nextId++; },
+      clear: (id) => pending.delete(id),
+    };
+    const scheduler = app.createShrinkScheduler({ delayMs: 5000, setMini: (v) => calls.push(v), canShrink, timers });
+    const fire = () => { for (const [id, t] of [...pending]) { pending.delete(id); t.fn(); } };
+    return { scheduler, calls, pending, fire };
+  }
+
+  it("shrinks once the delay passes", () => {
+    const { scheduler, calls, pending, fire } = makeScheduler();
+    scheduler.schedule();
+    assert.equal(pending.size, 1);
+    assert.deepEqual(calls, []);
+    fire();
+    assert.deepEqual(calls, [true]);
+  });
+
+  it("restarts the wait when scheduled again", () => {
+    const { scheduler, pending } = makeScheduler();
+    scheduler.schedule();
+    scheduler.schedule();
+    assert.equal(pending.size, 1);
+  });
+
+  it("expands at once and cancels a pending shrink", () => {
+    const { scheduler, calls, pending, fire } = makeScheduler();
+    scheduler.schedule();
+    scheduler.expand();
+    fire();
+    assert.equal(pending.size, 0);
+    assert.deepEqual(calls, [false]);
+  });
+
+  it("works with the real timers when none are injected", () => {
+    const scheduler = app.createShrinkScheduler({ delayMs: 60000, setMini() {} });
+    scheduler.schedule();    // the real setTimeout rejects being called as a method
+    scheduler.cancel();
+  });
+
+  it("does not shrink while canShrink says no", () => {
+    const { scheduler, calls, fire } = makeScheduler({ canShrink: () => false });
+    scheduler.schedule();
+    fire();
+    assert.deepEqual(calls, []);
+  });
+});
+
+describe("swipeDirection", () => {
+  const start = { x: 200, y: 100, t: 0 };
+
+  it("treats a long quick leftward drag as forward", () => {
+    assert.equal(app.swipeDirection(start, { x: 120, y: 105, t: 200 }), 1);
+  });
+
+  it("treats a long quick rightward drag as back", () => {
+    assert.equal(app.swipeDirection(start, { x: 290, y: 95, t: 200 }), -1);
+  });
+
+  it("ignores short drags, slow drags and mostly vertical drags", () => {
+    assert.equal(app.swipeDirection(start, { x: 170, y: 100, t: 100 }), 0);
+    assert.equal(app.swipeDirection(start, { x: 100, y: 100, t: 1500 }), 0);
+    assert.equal(app.swipeDirection(start, { x: 100, y: 180, t: 200 }), 0);
   });
 });
