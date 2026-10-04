@@ -49,6 +49,19 @@ describe("stripNoisySymbols", () => {
     assert.equal(app.stripNoisySymbols(text).length, text.length);
   });
 
+  it("keeps the length when a symbol is an emoji made of two UTF-16 units", () => {
+    const text = "model.\n\n\u{1F9E0} A single response \u{1F680} next";
+    assert.equal(app.stripNoisySymbols(text).length, text.length);
+  });
+
+  it("keeps every word at its original offset after emoji", () => {
+    const text = "First part. \u{1F9E0} A single LLM response \u{1F468}‍\u{1F4BB} then more.";
+    const cleaned = app.stripNoisySymbols(text);
+    for (const token of plain(app.tokenize(text))) {
+      assert.equal(cleaned.slice(token.start, token.end), token.text);
+    }
+  });
+
   it("turns identifier punctuation into spaces", () => {
     assert.equal(app.stripNoisySymbols("my_variable-name"), "my variable name");
   });

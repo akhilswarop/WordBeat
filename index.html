@@ -618,15 +618,6 @@ try {
     /* Horizontal swipes on the card skip sentences; vertical ones still scroll. */
     touch-action: pan-y;
   }
-  /* A translucent card lets the text show through where the browser can blur
-     what is behind it; elsewhere the solid fill above stays. */
-  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    .player {
-      background: color-mix(in srgb, var(--paper) 80%, transparent);
-      -webkit-backdrop-filter: blur(14px) saturate(1.15);
-      backdrop-filter: blur(14px) saturate(1.15);
-    }
-  }
   /* The tools list (sheet or dropdown) sits under the player in stacking order, so the player steps aside. */
   .tools-open .player { visibility: hidden; }
   /* While reading, the card shrinks to a pill so the text keeps the screen. */
@@ -1493,7 +1484,10 @@ const SPEAKABLE_PUNCTUATION = new Set([
  *  and chunk charOffset — the entire TTS-sync system — stays exactly
  *  valid against the result. */
 function stripNoisySymbols(text) {
-  return text.replace(/[\p{P}\p{S}]/gu, (ch) => (SPEAKABLE_PUNCTUATION.has(ch) ? ch : " "));
+  // A symbol outside the Basic Multilingual Plane (an emoji, say) is two
+  // UTF-16 units long, so it is replaced by two spaces: the result must stay
+  // exactly as long as the input or every word offset after it shifts.
+  return text.replace(/[\p{P}\p{S}]/gu, (ch) => (SPEAKABLE_PUNCTUATION.has(ch) ? ch : " ".repeat(ch.length)));
 }
 
 /** Largest token index whose start is <= charPos. Binary search. */
