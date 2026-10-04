@@ -2812,6 +2812,27 @@ class WebSpeechEngine {
  *     current word — the same behaviour the Web Speech engine has.
  * ------------------------------------------------------------------ */
 
+/** Passes each reported word on one report later. Android announces a word
+ *  as it queues its audio, about one word before it is heard; showing it
+ *  when the next one is announced keeps the highlight with the voice at
+ *  any speed, without a tuned delay. flush() releases the last word. */
+function createWordHold(emit) {
+  let held = null;
+  return {
+    report(char) {
+      const previous = held;
+      held = char;
+      if (previous !== null) emit(previous);
+    },
+    flush() {
+      const last = held;
+      held = null;
+      if (last !== null) emit(last);
+    },
+    clear() { held = null; },
+  };
+}
+
 class AndroidTtsEngine {
   constructor({ onWord, onStateChange, onTimingMode, onDone, onBuffering }) {
     this.onWord = onWord;
@@ -2827,6 +2848,7 @@ class AndroidTtsEngine {
     this.state = "idle";
     this.generation = 0;
     this._lastChar = 0;
+    this._hold = createWordHold((char) => this.onWord(char));
     // Which chunk index onBuffering(false) should fire for — TtsBridge
     // queues the whole remaining batch up front (QUEUE_ADD), so "start"
     // events arrive one per chunk in order, same as "done" below.
@@ -2863,11 +2885,12 @@ class AndroidTtsEngine {
       this.onBuffering?.(false);   // safety net if "start" was ever missed
       this._lastChar = chunk.charOffset + payload.start;
       this.onTimingMode?.("native");   // ranges are always real here
-      this.onWord(this._lastChar);
+      this._hold.report(this._lastChar);
       return;
     }
 
     if (type === "done") {
+      this._hold.flush();   // the chunk has finished playing, so its last word was spoken
       const id = Number(payload.id);
       // The queue is finished only when the final chunk reports done.
       if (id === this.chunks.length - 1 && this.state === "playing") {
@@ -2891,6 +2914,7 @@ class AndroidTtsEngine {
 
   speak(chunks, { startIndex = 0 } = {}) {
     this.native.stop();
+    this._hold.clear();
     this.generation++;
     this.chunks = chunks;
     this._nextExpectedChunk = startIndex;
@@ -2908,6 +2932,7 @@ class AndroidTtsEngine {
   pause() {
     if (this.state !== "playing") return;
     this.native.stop();
+    this._hold.clear();
     this.onBuffering?.(false);
     this._setState("paused");
   }
@@ -2938,6 +2963,7 @@ class AndroidTtsEngine {
   stop() {
     this.generation++;
     this._lastChar = 0;
+    this._hold.clear();
     this.onBuffering?.(false);
     this.native.stop();
     this._setState("idle");
