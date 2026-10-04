@@ -2016,6 +2016,11 @@ async function extractDocx(file) {
  *     real timing data.
  * ------------------------------------------------------------------ */
 
+// How long a started utterance gets to report a word boundary before the
+// engine is assumed not to emit them and the highlight falls back to an
+// estimate.
+const BOUNDARY_PROBE_MS = 700;
+
 class WebSpeechEngine {
   constructor({ onWord, onStateChange, onTimingMode, onDone, onBuffering }) {
     this.onWord = onWord;
@@ -2095,7 +2100,7 @@ class WebSpeechEngine {
         if (gen !== this.generation || sawBoundary) return;
         this.onTimingMode?.("estimated");
         this._startEstimator(chunk);
-      }, 700);
+      }, BOUNDARY_PROBE_MS);
     };
 
     u.onend = () => {
@@ -2161,7 +2166,7 @@ class WebSpeechEngine {
     this.generation++;              // invalidate every in-flight handler, same as stop()
     this._stopEstimator();
     this.onBuffering?.(false);
-    try { this.synth.cancel(); } catch (_) {}
+    this._cancelSpeech();
     this._setState("paused");
   }
 
@@ -2176,7 +2181,7 @@ class WebSpeechEngine {
     this._estimateStart = 0;
     this._lastChar = 0;
     this.onBuffering?.(false);
-    try { this.synth.cancel(); } catch (_) {}
+    this._cancelSpeech();
     this._setState("idle");
   }
 
@@ -2224,6 +2229,12 @@ class WebSpeechEngine {
   setVoice(voice) {
     this.voice = voice;
     if (this.state === "playing") this._resumeFrom(this._lastChar);
+  }
+
+  /** cancel() can throw when the browser's speech service has gone away;
+   *  there is nothing left to cancel then. */
+  _cancelSpeech() {
+    try { this.synth.cancel(); } catch (_) { /* nothing to cancel */ }
   }
 
   _setState(s) {
@@ -2387,7 +2398,7 @@ class AndroidTtsEngine {
   }
 
   setVoiceByName(name) {
-    try { this.native.setVoice(name); } catch (_) {}
+    try { this.native.setVoice(name); } catch (_) { /* voice vanished; keep the current one */ }
     // Same restart-to-apply story as setRate above — Android's TTS also
     // only picks up a voice change on the next utterance, so without this
     // a picked voice sat silently unused until the sentence ended or the
@@ -2767,7 +2778,7 @@ function langDisplayName(tag) {
   if (_langNameCache.has(tag)) return _langNameCache.get(tag);
   let name = tag;
   if (_langDisplayNames) {
-    try { name = _langDisplayNames.of(tag) || tag; } catch {}
+    try { name = _langDisplayNames.of(tag) || tag; } catch (_) { /* malformed tag: show it raw */ }
   }
   _langNameCache.set(tag, name);
   return name;
@@ -3143,6 +3154,7 @@ if (!Engine) {
     el.timingMode.classList.remove("show");
   });
 
+  const RATE_APPLY_DEBOUNCE_MS = 300;
   let rateApplyTimer = null;
   el.rate.addEventListener("input", () => {
     const r = parseFloat(el.rate.value);
@@ -3159,7 +3171,7 @@ if (!Engine) {
     syncSpeedSlider();
     renderDial();
     clearTimeout(rateApplyTimer);
-    rateApplyTimer = setTimeout(() => app.engine.setRate(r), 300);
+    rateApplyTimer = setTimeout(() => app.engine.setRate(r), RATE_APPLY_DEBOUNCE_MS);
   });
 
   el.reader.addEventListener("click", (e) => {
@@ -3501,7 +3513,11 @@ async function prepareDoc(raw, { forceMarkdown = false, cleanable = true, html =
   return { text: cleaned.trim() ? cleaned : raw, tree: null };
 }
 
-function toast(msg, ms = 2600) {
+const DEFAULT_TOAST_MS = 2600;
+// For progress messages that a following toast replaces, not a timeout.
+const STICKY_TOAST_MS = 60000;
+
+function toast(msg, ms = DEFAULT_TOAST_MS) {
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.classList.add("on");
@@ -4060,13 +4076,13 @@ function detectFormat(file) {
 }
 
 async function importDocx(file) {
-  toast(`Opening ${file.name}…`, 60000);
+  toast(`Opening ${file.name}…`, STICKY_TOAST_MS);
   const tree = await extractDocx(file);
   showDocument({ tree, label: file.name });
 }
 
 async function importEpub(file) {
-  toast(`Opening ${file.name}…`, 60000);
+  toast(`Opening ${file.name}…`, STICKY_TOAST_MS);
   const book = await extractEpub(file);
   app.epub = { ...book, currentIndex: 0 };
 
@@ -4104,9 +4120,9 @@ async function ocrScannedPdf(tree, pages, fileName) {
 }
 
 async function importPdf(file) {
-  toast(`Rendering ${file.name}…`, 60000);
+  toast(`Rendering ${file.name}…`, STICKY_TOAST_MS);
   const layout = await extractPdfOriginalLayout(file, (n, total) => {
-    toast(`Rendering page ${n} of ${total}…`, 60000);
+    toast(`Rendering page ${n} of ${total}…`, STICKY_TOAST_MS);
   });
   const { tree, pages } = layout;
   let { text, tokens, spans, rangeHighlighter } = layout;
@@ -4251,11 +4267,15 @@ function loadReadability() {
  *  serializes its output means sanitizeHtmlDoc needs no changes at all —
  *  by the time it reads anything, every URL already is absolute. */
 function absolutizeUrls(doc, baseUrl) {
-  doc.querySelectorAll("img[src]").forEach((img) => {
-    try { img.setAttribute("src", new URL(img.getAttribute("src"), baseUrl).href); } catch {}
-  });
-  doc.querySelectorAll("a[href]").forEach((a) => {
-    try { a.setAttribute("href", new URL(a.getAttribute("href"), baseUrl).href); } catch {}
+  absolutizeAttribute(doc, "img[src]", "src", baseUrl);
+  absolutizeAttribute(doc, "a[href]", "href", baseUrl);
+}
+
+function absolutizeAttribute(doc, selector, attribute, baseUrl) {
+  doc.querySelectorAll(selector).forEach((node) => {
+    try {
+      node.setAttribute(attribute, new URL(node.getAttribute(attribute), baseUrl).href);
+    } catch (_) { /* unparsable URL: keep the original text */ }
   });
 }
 
@@ -4266,12 +4286,20 @@ function absolutizeUrls(doc, baseUrl) {
  *  that third-party service. */
 const JINA_READER = "https://r.jina.ai/";
 
+// A page that is slow to answer should fall through to the next route
+// rather than hang; the rendered-Markdown route renders in a real browser,
+// so it is given the longest.
+const DIRECT_FETCH_TIMEOUT_MS = 15000;
+const READER_HTML_TIMEOUT_MS = 30000;
+const READER_MARKDOWN_TIMEOUT_MS = 45000;
+const WIKI_API_TIMEOUT_MS = 30000;
+
 async function fetchHtmlFromWeb(url) {
   const attempts = [
-    () => fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15000) }),
+    () => fetch(url, { redirect: "follow", signal: AbortSignal.timeout(DIRECT_FETCH_TIMEOUT_MS) }),
     () => fetch(`${JINA_READER}${url}`, {
       headers: { "X-Return-Format": "html" },
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(READER_HTML_TIMEOUT_MS),
     }),
   ];
   let lastErr = null;
@@ -4301,7 +4329,7 @@ async function fetchMediaWikiHtml(url) {
     const page = encodeURIComponent(decodeURIComponent(m[2]));
     const res = await fetch(
       `${u.origin}${m[1] || ""}/api.php?action=parse&prop=text&format=json&formatversion=2&redirects=1&origin=*&page=${page}`,
-      { signal: AbortSignal.timeout(30000) }
+      { signal: AbortSignal.timeout(WIKI_API_TIMEOUT_MS) }
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -4314,7 +4342,7 @@ async function fetchMediaWikiHtml(url) {
 }
 
 async function fetchAndReadUrl(url) {
-  toast(`Fetching ${url}…`, 60000);
+  toast(`Fetching ${url}…`, STICKY_TOAST_MS);
   const wikiHtml = await fetchMediaWikiHtml(url);
   if (wikiHtml) {
     await window.onUrlFetched(url, wikiHtml, null);
@@ -4335,7 +4363,12 @@ async function fetchAndReadUrl(url) {
 window.onUrlFetched = async function (url, html, error) {
   let article = null;
   if (!error) {
-    try { article = await articleFromHtml(url, html); } catch (_) {}
+    try {
+      article = await articleFromHtml(url, html);
+    } catch (err) {
+      // Not fatal: the rendered-Markdown route still gets a turn.
+      console.debug("Readability extraction failed", err);
+    }
   }
   await showBestArticle(url, article, error);
 };
@@ -4364,10 +4397,15 @@ function isUsableArticle(a) {
  *  (a byline, "Updated Oct 3") that never end in punctuation — The Verge's
  *  short free articles end on one. */
 const PAYWALL_MARKERS = /member-only story|get unlimited access|read the full story|to continue reading|sign in to read|subscribers only|(article|content) is for subscribers/i;
+const PAYWALL_HEAD_CHARS = 1500;
+const PAYWALL_TAIL_CHARS = 600;
+// Longer than this and a missing final full stop is not evidence of a cut-off.
+const PAYWALL_MAX_SHORT_WORDS = 400;
+
 function looksPaywalled({ text, tree }) {
   const t = text.trim();
-  if (PAYWALL_MARKERS.test(t.slice(0, 1500)) || PAYWALL_MARKERS.test(t.slice(-600))) return true;
-  if (countWords(t) >= 400) return false;
+  if (PAYWALL_MARKERS.test(t.slice(0, PAYWALL_HEAD_CHARS)) || PAYWALL_MARKERS.test(t.slice(-PAYWALL_TAIL_CHARS))) return true;
+  if (countWords(t) >= PAYWALL_MAX_SHORT_WORDS) return false;
   const paragraphs = [...tree.querySelectorAll("p, li, blockquote")]
     .map((b) => b.textContent.trim())
     .filter((s) => countWords(s) >= 8);
@@ -4426,7 +4464,7 @@ function trimLeadingBoilerplate(md) {
  *  browser and returns Markdown, which goes through the same Markdown path
  *  as everything else. Same third-party caveat as fetchHtmlFromWeb. */
 async function articleFromJinaMarkdown(url) {
-  const res = await fetch(`${JINA_READER}${url}`, { signal: AbortSignal.timeout(45000) });
+  const res = await fetch(`${JINA_READER}${url}`, { signal: AbortSignal.timeout(READER_MARKDOWN_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const raw = await res.text();
   const marker = raw.indexOf("Markdown Content:");
@@ -4448,7 +4486,7 @@ async function chooseBestArticle(url, htmlArticle) {
       const md = await articleFromJinaMarkdown(url);
       if (!looksBlocked(md.text) &&
           (isUsableArticle(md) || !candidate || countWords(md.text) > countWords(candidate.text))) candidate = md;
-    } catch (_) {}
+    } catch (_) { /* the fallback is optional; judge what we already have */ }
   }
   const salvageable = candidate && countWords(candidate.text) >= MIN_SALVAGE_WORDS && !looksBlocked(candidate.text);
   return { article: isUsableArticle(candidate) || salvageable ? candidate : null, candidate };
@@ -4607,6 +4645,16 @@ function dismissClipPrompt(accept) {
  *  handled link is remembered across reloads so a stale one doesn't
  *  re-load every time the app opens. */
 const LAST_CLIP_URL_KEY = "wordbeat.lastClipUrl";
+
+// Storage can be blocked (private windows, site data cleared); the feature
+// then just forgets across reloads.
+function readStored(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+
+function writeStored(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* storage unavailable */ }
+}
 async function checkClipboardOnFocusWeb() {
   if (window.AndroidTTS || location.protocol === "file:") return;
   if (!navigator.clipboard?.readText || !navigator.permissions?.query) return;
@@ -4616,10 +4664,8 @@ async function checkClipboardOnFocusWeb() {
     if (perm.state !== "granted") return;
     const text = (await navigator.clipboard.readText()).trim();
     if (!looksLikeBareUrl(text)) return;
-    let last = null;
-    try { last = localStorage.getItem(LAST_CLIP_URL_KEY); } catch (_) {}
-    if (text === last || text === lastClipPrompt) return;
-    try { localStorage.setItem(LAST_CLIP_URL_KEY, text); } catch (_) {}
+    if (text === readStored(LAST_CLIP_URL_KEY) || text === lastClipPrompt) return;
+    writeStored(LAST_CLIP_URL_KEY, text);
     lastClipPrompt = text;
     if (app.engine?.state === "playing") {
       pendingClip = { text, html: null, isUrl: true };
@@ -4897,6 +4943,7 @@ el.dial.addEventListener("keydown", (e) => {
  * 2, 2.5, 3, 4, 5), so stepping by 0.25 from any of them stays on that same
  * grid; syncSpeedSlider()/renderDial() (already wired to #rate's "input"
  * handler) then just snap the dial to whichever rung is nearest. */
+const RATE_BUBBLE_HIDE_MS = 700;
 let rateBubbleHideTimer = null;
 function setRateAndFlash(next) {
   el.rate.value = String(next);
@@ -4905,7 +4952,7 @@ function setRateAndFlash(next) {
   el.rateBubbleVal.textContent = `${next}×`;
   el.rateBubble.classList.add("show");
   clearTimeout(rateBubbleHideTimer);
-  rateBubbleHideTimer = setTimeout(() => el.rateBubble.classList.remove("show"), 700);
+  rateBubbleHideTimer = setTimeout(() => el.rateBubble.classList.remove("show"), RATE_BUBBLE_HIDE_MS);
 }
 function nudgeRate(delta) {
   const min = parseFloat(el.rate.min), max = parseFloat(el.rate.max);
