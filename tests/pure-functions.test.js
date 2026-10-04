@@ -1,6 +1,6 @@
 // Run with: node tests/pure-functions.test.js
 // Pure helpers from index.html, loaded without a browser (see load-app.js).
-const { describe, it } = require("node:test");
+const { describe, it, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { loadApp } = require("./load-app.js");
 
@@ -204,6 +204,90 @@ describe("detectFormat", () => {
 
   it("lets an earlier format claim a file before text does", () => {
     assert.equal(app.detectFormat(file("scan.pdf", "text/plain")), "pdf");
+  });
+});
+
+describe("createPlaybackClock", () => {
+  // The clock only needs a time source, a playing flag, a rate and two text
+  // targets, so it is built here with all four faked.
+  const created = [];
+  // A started clock owns a real interval that would keep Node alive.
+  afterEach(() => { created.splice(0).forEach((clock) => clock.stop()); });
+
+  function makeClock({ rate = 1 } = {}) {
+    const time = { now: 1000 };
+    const state = { playing: false };
+    const elapsedEl = { textContent: "" };
+    const totalEl = { textContent: "" };
+    const clock = app.createPlaybackClock({
+      isPlaying: () => state.playing,
+      getRate: () => rate,
+      elapsedEl,
+      totalEl,
+      now: () => time.now,
+    });
+    created.push(clock);
+    return { clock, time, state, elapsedEl, totalEl };
+  }
+
+  it("counts only time spent playing", () => {
+    const { clock, time, state, elapsedEl } = makeClock();
+    state.playing = true; clock.start();
+    time.now += 5000;
+    state.playing = false; clock.stop();
+    time.now += 60000;   // paused for a minute
+    clock.render();
+    assert.equal(elapsedEl.textContent, "0:05");
+  });
+
+  it("does not bank time since page load when stopped before ever starting", () => {
+    const { clock, time, elapsedEl } = makeClock();
+    time.now = 5_000_000;   // long after load, segmentStart still at its initial 0
+    clock.stop();
+    assert.equal(elapsedEl.textContent, "0:00");
+  });
+
+  it("resumes from the banked time after a pause", () => {
+    const { clock, time, state, elapsedEl } = makeClock();
+    state.playing = true; clock.start();
+    time.now += 3000;
+    state.playing = false; clock.stop();
+    state.playing = true; clock.start();
+    time.now += 4000;
+    clock.render();
+    assert.equal(elapsedEl.textContent, "0:07");
+  });
+
+  it("estimates the total from the fixed words-per-second guess until it can measure", () => {
+    const { clock, totalEl } = makeClock({ rate: 1 });
+    clock.setProgress(0, 290);   // 290 words at 2.9 words/s
+    clock.render();
+    assert.equal(totalEl.textContent, "1:40");
+  });
+
+  it("scales the guess by playback rate", () => {
+    const { clock, totalEl } = makeClock({ rate: 2 });
+    clock.setProgress(0, 290);
+    clock.render();
+    assert.equal(totalEl.textContent, "0:50");
+  });
+
+  it("extrapolates the total from measured pace once enough has played", () => {
+    const { clock, time, state, totalEl } = makeClock();
+    state.playing = true; clock.start();
+    time.now += 10_000;                 // 10 s elapsed
+    clock.setProgress(50, 200);         // a quarter done, so about 40 s in all
+    clock.render();
+    assert.equal(totalEl.textContent, "0:40");
+  });
+
+  it("returns to zero on reset", () => {
+    const { clock, time, state, elapsedEl } = makeClock();
+    state.playing = true; clock.start();
+    time.now += 9000;
+    state.playing = false; clock.stop();
+    clock.reset();
+    assert.equal(elapsedEl.textContent, "0:00");
   });
 });
 
