@@ -1,13 +1,17 @@
 package com.wordbeat.tts;
 
+import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
 import android.view.HapticFeedbackConstants;
+import android.view.Window;
+import android.view.WindowInsetsController;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
@@ -136,6 +140,26 @@ public class TtsBridge {
     @JavascriptInterface
     public void hapticTick() {
         web.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+    }
+
+    /**
+     * The page draws behind the status and gesture bars, so their icons must
+     * contrast with whichever theme is showing: dark icons on a light page,
+     * light icons on a dark one. Before API 30 the bars keep their own dark
+     * colour and white icons, which already suits every theme.
+     */
+    @JavascriptInterface
+    public void setSystemBarsLight(boolean lightBackground) {
+        if (!(context instanceof Activity) || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        Activity activity = (Activity) context;
+        activity.runOnUiThread(() -> {
+            Window window = activity.getWindow();
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller == null) return;
+            int icons = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            controller.setSystemBarsAppearance(lightBackground ? icons : 0, icons);
+        });
     }
 
     /**

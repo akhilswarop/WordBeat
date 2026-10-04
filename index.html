@@ -4,12 +4,22 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#101218">
+<script id="early-theme">
+// Applies the saved theme before first paint so a light or sepia reader
+// does not flash dark. Mirrors resolveTheme() in the main script.
+try {
+  const saved = JSON.parse(localStorage.getItem("wordbeat.prefs.v1")).theme;
+  const light = matchMedia("(prefers-color-scheme: light)").matches;
+  const theme = saved === "auto" ? (light ? "light" : "dark") : saved;
+  if (["dark", "light", "sepia", "oled"].includes(theme)) document.documentElement.dataset.theme = theme;
+} catch (_) { /* no saved preference: the default dark theme applies */ }
+</script>
 <style>
-  /* Dark by default, unconditionally — not "follows system preference",
-     which would still show light on a light-mode system. A system light
-     preference no longer has any effect; :root[data-theme="light"] is kept
-     as a hook for a future manual toggle, since nothing sets it today. */
+  /* Dark unless the reader picks another theme in Reading settings; the
+     choice lives in data-theme on <html>. "Match system" is an explicit
+     opt-in that resolves to dark or light in script, never a silent default. */
   :root {
+    color-scheme: dark;
     --bg: #101218;
     --paper: #181b23;
     --line: #262a35;
@@ -29,7 +39,45 @@
     --syn-number: #e8c56b;
     --syn-title: #7fc4ff;
   }
+  :root[data-theme="oled"] {
+    --bg: #000000;
+    --paper: #0b0b0d;
+    --line: #1b1d24;
+    --text: #e6e8ef;
+    --muted: #8a90a2;
+    --accent: #7a90ff;
+    --accent-ink: #05060a;
+    --sentence: #1a1d3a;
+    --word: #3d3a96;
+    --word-ink: #f2f0ff;
+    --word-edge: #b6c0ff;
+    --chip: #14161c;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.6);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,.7), 0 16px 40px rgba(0,0,0,.6);
+  }
+  :root[data-theme="sepia"] {
+    color-scheme: light;
+    --bg: #ece0c8;
+    --paper: #f7efdc;
+    --line: #dccdaa;
+    --text: #3a2f22;
+    --muted: #6e604b;
+    --accent: #9a4a14;
+    --accent-ink: #ffffff;
+    --sentence: #ead9b4;
+    --word: #e0b878;
+    --word-ink: #2a1c0a;
+    --word-edge: #9a4a14;
+    --chip: #efe3c8;
+    --shadow-sm: 0 1px 2px rgba(60,40,10,.10);
+    --shadow-lg: 0 4px 12px rgba(60,40,10,.12), 0 16px 40px rgba(60,40,10,.14);
+    --syn-keyword: #a8431f;
+    --syn-string: #4f6b1f;
+    --syn-number: #8a5a0a;
+    --syn-title: #1f5c8a;
+  }
   :root[data-theme="light"] {
+    color-scheme: light;
     --bg: #eef0f6;
     --paper: #ffffff;
     --line: #e2e5ee;
@@ -255,13 +303,102 @@
   .voice-row-label { flex: 1; min-width: 0; }
   .voice-empty { padding: 14px 8px; color: var(--muted); font-size: 13px; text-align: center; }
 
+  /* ------------------------ reading settings ------------------------ */
+
+  .settings-panel {
+    position: fixed; z-index: 60;
+    top: calc(var(--safe-top) + 54px); right: calc(14px + var(--safe-right));
+    width: min(330px, 92vw);
+    max-height: calc(100dvh - var(--safe-top) - 70px); overflow-y: auto;
+    background: var(--paper); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--shadow-lg);
+    padding: 12px 14px 14px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .sp-handle { display: none; }
+  .sp-head { display: flex; align-items: center; justify-content: space-between; }
+  .sp-title { font-size: 15px; font-weight: 700; }
+  .sp-label { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-top: 8px; }
+  .sp-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .sp-themes { display: flex; gap: 6px; }
+  .sp-sw {
+    flex: 1; min-width: 0; appearance: none; background: transparent; border: 0;
+    padding: 0; cursor: pointer; font: inherit; color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .sp-sw-face {
+    width: 100%; height: 40px; border-radius: 10px;
+    border: 2px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    font-family: Georgia, serif; font-size: 15px;
+    background: var(--s-bg); color: var(--s-fg);
+  }
+  .sw-auto  { background: linear-gradient(135deg, #181b23 50%, #ffffff 50%); --s-fg: #6b83ff; }
+  .sw-dark  { --s-bg: #181b23; --s-fg: #6b83ff; }
+  .sw-light { --s-bg: #ffffff; --s-fg: #2f4bf0; }
+  .sw-sepia { --s-bg: #f7efdc; --s-fg: #9a4a14; }
+  .sw-oled  { --s-bg: #000000; --s-fg: #7a90ff; }
+  .sp-sw-name { font-size: 11.5px; }
+  .sp-sw[aria-checked="true"] .sp-sw-face { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .sp-sw[aria-checked="true"] .sp-sw-name { color: var(--text); font-weight: 700; }
+  .sp-seg { display: flex; gap: 6px; }
+  .sp-seg button {
+    flex: 1; min-width: 0; appearance: none; height: 34px; padding: 0 4px;
+    border-radius: 9px; border: 1px solid var(--line);
+    background: var(--chip); color: var(--text);
+    font: inherit; font-size: 12.5px; cursor: pointer;
+  }
+  .sp-seg button[aria-checked="true"] {
+    border-color: var(--accent); color: var(--text);
+    background: var(--sentence); font-weight: 700;
+  }
+  #spSize { width: 100%; margin: 2px 0 0; accent-color: var(--accent); }
+  .sp-switch {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    color: var(--text); font: inherit; font-size: 13.5px; text-align: left;
+    padding: 12px 0 2px; margin-top: 4px; border-top: 1px solid var(--line);
+  }
+  .sp-switch kbd {
+    font: inherit; font-size: 11px; color: var(--muted);
+    border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 5px; padding: 0 6px; background: var(--chip);
+  }
+  .sp-track {
+    margin-left: auto; width: 38px; height: 22px; border-radius: 11px;
+    background: var(--line); position: relative; transition: background .15s;
+  }
+  .sp-track::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--muted); transition: transform .15s, background .15s;
+  }
+  .sp-switch[aria-checked="true"] .sp-track { background: var(--accent); }
+  .sp-switch[aria-checked="true"] .sp-track::after {
+    transform: translateX(16px); background: var(--accent-ink);
+  }
+  .settings-panel button:focus-visible, #spSize:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .scrim { display: none; position: fixed; inset: 0; z-index: 55; background: rgba(0,0,0,.5); }
+  @keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
   /* ----------------------------- paper ----------------------------- */
 
   /* One measure shared by the reading panel and the editor, so switching
      between them doesn't shift the layout. Wide enough to actually use the
      screen; capped because past roughly 85 characters a line the eye loses
      its place on the return sweep. Tune --measure to taste. */
-  :root { --measure: clamp(900px, 72vw, 1000px); }
+  :root {
+    --reader-size: 20px;
+    --reader-leading: 1.95;
+    --reader-font: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --measure-em: 30;
+    /* The measure is in em of the reading size, so a line holds the same
+       number of characters whatever the text size; 120px covers the paper's
+       widest side padding. */
+    --measure: calc(var(--reader-size) * var(--measure-em) + 120px);
+  }
 
   main { padding: 24px clamp(12px, 3vw, 28px) 190px; }
 
@@ -274,9 +411,9 @@
   }
 
   #reader {
-    font-family: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
-    font-size: var(--reader-size, 20px);
-    line-height: 1.95;
+    font-family: var(--reader-font);
+    font-size: var(--reader-size);
+    line-height: var(--reader-leading);
     white-space: pre-wrap;
     word-wrap: break-word;
   }
@@ -388,6 +525,16 @@
                 0 2px 0 0 var(--word-edge);
   }
   .w:hover:not(.active) { box-shadow: 0 0 0 2px var(--chip); background: var(--chip); }
+
+  /* Focus mode dims everything except the sentence being read, by colour
+     rather than opacity so the punctuation between the word spans dims too.
+     It reuses the .sentence band, so the fixed-layout PDF text layer (which
+     has no band) is untouched. The fade is a short colour/background
+     transition, which also softens the hop from word to word. */
+  .focus-mode #reader.has-band { color: color-mix(in srgb, var(--text) 38%, var(--paper)); }
+  .focus-mode #reader.has-band .w.sentence:not(.active) { color: var(--text); }
+  .w { transition: color .2s, background-color .12s, box-shadow .12s; }
+  .textLayer .w { transition: none; }
 
   /* Original-layout PDF mode: the canvas is the page itself and pdf.js's
      untouched text runs sit invisibly above it. Playback selects a precise
@@ -769,6 +916,20 @@
       min-height: 70vh;
     }
     .tb-mid { max-width: 52vw; }
+
+    /* Reading settings becomes a bottom sheet on a phone. */
+    .scrim:not(.hidden) { display: block; }
+    .settings-panel {
+      top: auto; left: 0; right: 0; bottom: 0; width: auto;
+      max-height: 88dvh;
+      border-width: 1px 0 0; border-radius: 20px 20px 0 0;
+      padding: 8px 16px calc(16px + var(--safe-bottom));
+      animation: sheet-up .22s ease-out;
+    }
+    .sp-handle {
+      display: block; width: 36px; height: 4px; border-radius: 2px;
+      background: var(--line); margin: 0 auto 6px;
+    }
   }
 
   /* Respect the system "reduce motion" setting: no fades, slides or spinning
@@ -788,6 +949,9 @@
     .dial { width: 48px; height: 48px; }
     #tools .ic { height: 48px; }
     #tools .voice-trigger { height: 48px; }
+    .sp-sw-face, .sp-seg button { height: 44px; }
+    .sp-switch { min-height: 48px; }
+    #spSize { height: 32px; }
   }
 </style>
 
@@ -828,7 +992,7 @@
       <button class="ic" id="btnStop" data-label="Stop" title="Stop" aria-label="Stop">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
       </button>
-      <button class="ic" id="btnFont" data-label="Text size" title="Text size" aria-label="Text size">Aa</button>
+      <button class="ic" id="btnFont" data-label="Reading settings" title="Reading settings" aria-label="Reading settings" aria-haspopup="dialog" aria-expanded="false">Aa</button>
       <button class="ic" id="btnClean" data-label="Render formatting" title="Render Markdown formatting" aria-label="Render formatting" aria-pressed="true">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M5 12h9M5 17h6"/><path d="m15.5 16.5 2 2 4-4.5"/></svg>
       </button>
@@ -871,6 +1035,7 @@
       <input type="text" class="voice-search" id="voiceSearch" placeholder="Search voices…" aria-label="Search voices" autocomplete="off">
       <div class="voice-list" id="voiceList"></div>
     </div>
+
 
     <button class="ic" id="btnMore" title="More controls" aria-label="More controls" aria-expanded="false">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
@@ -928,6 +1093,57 @@
 
 <div id="drop"><div>Drop a .txt, .md, .pdf, .epub, .docx, or photo (JPG/PNG) to read it</div></div>
 <div id="toast" role="status" aria-live="polite"></div>
+<!-- Reading settings: a popover under the top bar on wide screens, a
+     bottom sheet on phones (see the 640px media query). Lives outside the
+     header: the header is a sticky stacking context that would keep the
+     sheet underneath the player. -->
+<div class="settings-panel hidden" id="settingsPanel" role="dialog" aria-label="Reading settings">
+  <div class="sp-handle" aria-hidden="true"></div>
+  <div class="sp-head">
+    <span class="sp-title">Reading settings</span>
+    <button class="ic sp-close" id="settingsClose" title="Close" aria-label="Close reading settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+
+  <div class="sp-label" id="spThemeLabel">Theme</div>
+  <div class="sp-themes" role="radiogroup" aria-labelledby="spThemeLabel">
+    <button type="button" role="radio" class="sp-sw" data-pref="theme" data-value="auto"><span class="sp-sw-face sw-auto">Aa</span><span class="sp-sw-name">Auto</span></button>
+    <button type="button" role="radio" class="sp-sw" data-pref="theme" data-value="dark"><span class="sp-sw-face sw-dark">Aa</span><span class="sp-sw-name">Dark</span></button>
+    <button type="button" role="radio" class="sp-sw" data-pref="theme" data-value="light"><span class="sp-sw-face sw-light">Aa</span><span class="sp-sw-name">Light</span></button>
+    <button type="button" role="radio" class="sp-sw" data-pref="theme" data-value="sepia"><span class="sp-sw-face sw-sepia">Aa</span><span class="sp-sw-name">Sepia</span></button>
+    <button type="button" role="radio" class="sp-sw" data-pref="theme" data-value="oled"><span class="sp-sw-face sw-oled">Aa</span><span class="sp-sw-name">OLED</span></button>
+  </div>
+
+  <div class="sp-label" id="spFontLabel">Font</div>
+  <div class="sp-seg" role="radiogroup" aria-labelledby="spFontLabel">
+    <button type="button" role="radio" data-pref="font" data-value="serif" style="font-family: ui-serif, Georgia, serif">Serif</button>
+    <button type="button" role="radio" data-pref="font" data-value="sans">Sans</button>
+    <button type="button" role="radio" data-pref="font" data-value="readable" style="font-family: Verdana, Tahoma, sans-serif">Readable</button>
+  </div>
+
+  <div class="sp-label sp-row"><label for="spSize">Text size</label><span id="spSizeVal">20 px</span></div>
+  <input type="range" id="spSize" min="16" max="30" step="1" value="20">
+
+  <div class="sp-label" id="spSpacingLabel">Line spacing</div>
+  <div class="sp-seg" role="radiogroup" aria-labelledby="spSpacingLabel">
+    <button type="button" role="radio" data-pref="spacing" data-value="snug">Snug</button>
+    <button type="button" role="radio" data-pref="spacing" data-value="normal">Normal</button>
+    <button type="button" role="radio" data-pref="spacing" data-value="airy">Airy</button>
+  </div>
+
+  <div class="sp-label" id="spWidthLabel">Width</div>
+  <div class="sp-seg" role="radiogroup" aria-labelledby="spWidthLabel">
+    <button type="button" role="radio" data-pref="width" data-value="narrow">Narrow</button>
+    <button type="button" role="radio" data-pref="width" data-value="medium">Medium</button>
+    <button type="button" role="radio" data-pref="width" data-value="wide">Wide</button>
+  </div>
+
+  <button type="button" class="sp-switch" id="spFocus" role="switch" aria-checked="false">
+    <span>Focus mode</span><kbd>F</kbd><span class="sp-track" aria-hidden="true"></span>
+  </button>
+</div>
+<div class="scrim hidden" id="scrim"></div>
 <!-- OSD-style rate readout shown only while dragging/adjusting the speed
      dial (#speedDial below) — centered on the viewport, not anchored to
      the dial itself, since the dial sits right under the thumb during a
@@ -1186,6 +1402,7 @@ class Renderer {
     this.el = el;
     this.spans = [];
     this.active = -1;
+    this._spokenCount = 0;
     this.rangeHighlighter = null;
   }
 
@@ -1214,8 +1431,7 @@ class Renderer {
 
     this.el.replaceChildren(frag);
     this.el.classList.remove("rich");
-    this.active = -1;
-    this._sFrom = this._sTo = null;
+    this._resetMarks();
   }
 
   /** Take an already-built tree whose words buildFromDom has wrapped. */
@@ -1225,8 +1441,14 @@ class Renderer {
     this.el.classList.add("rich");
     this.spans = spans;
     this.rangeHighlighter = rangeHighlighter;
+    this._resetMarks();
+  }
+
+  _resetMarks() {
     this.active = -1;
     this._sFrom = this._sTo = null;
+    this._spokenCount = 0;
+    this.el.classList.remove("has-band");
   }
 
   /** Appended after render/adopt when a document has no words at all —
@@ -1252,17 +1474,26 @@ class Renderer {
     // Mark everything up to here as spoken in reflow mode. Fixed-layout
     // PDFs reuse their positioned text run as a scroll anchor for several
     // words, so only the native Selection should paint there.
-    if (!this.rangeHighlighter) {
-      for (let i = 0; i < this.spans.length; i++) {
-        this.spans[i].classList.toggle("spoken", i < index);
-      }
-    }
+    if (!this.rangeHighlighter) this._markSpokenUpTo(index);
 
     const span = this.spans[index];
     if (!this.rangeHighlighter) span.classList.add("active");
     this.active = index;
 
     if (scroll) this._follow(span);
+  }
+
+  /** Moves the spoken/unspoken boundary to `index`, touching only the words
+   *  between the old and new boundary so a long document costs the same per
+   *  word as a short one. */
+  _markSpokenUpTo(index) {
+    const from = Math.min(this._spokenCount, index);
+    const to = Math.max(this._spokenCount, index);
+    const spoken = index > this._spokenCount;
+    for (let i = from; i < to && i < this.spans.length; i++) {
+      this.spans[i].classList.toggle("spoken", spoken);
+    }
+    this._spokenCount = index;
   }
 
   /** Only scroll when the word leaves a comfortable middle band. */
@@ -1301,14 +1532,14 @@ class Renderer {
     }
     this._sFrom = from;
     this._sTo = to;
+    this.el.classList.add("has-band");
   }
 
   clear() {
     if (this.rangeHighlighter) this.rangeHighlighter.clear();
     else if (this.active >= 0) this.spans[this.active].classList.remove("active");
     this.spans.forEach(s => s.classList.remove("spoken", "sentence"));
-    this.active = -1;
-    this._sFrom = this._sTo = null;
+    this._resetMarks();
   }
 }
 
@@ -3218,6 +3449,7 @@ if (!Engine) {
   document.addEventListener("keydown", (e) => {
     if (e.code !== "Space" || e.repeat) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.target.closest?.("#settingsPanel")) return;
 
     // Leave Space alone wherever it already means something: typing in the
     // editor, toggling a checkbox, opening a select.
@@ -4882,14 +5114,158 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTools();
 });
 
-/* --- text size --- */
-const READER_SIZES = [17, 20, 23, 27];
-let sizeIndex = 1;
-el.btnFont.addEventListener("click", () => {
-  sizeIndex = (sizeIndex + 1) % READER_SIZES.length;
-  document.documentElement.style.setProperty("--reader-size", `${READER_SIZES[sizeIndex]}px`);
-  toast(`Text size ${READER_SIZES[sizeIndex]}px`);
+/* --- reading preferences ---
+ * One saved object drives theme, font, size, spacing, width and focus mode.
+ * normalizePrefs() is the single gate: anything stored or passed in that is
+ * not a known value falls back to the default, so a corrupt entry can never
+ * leave the reader unreadable. */
+const PREFS_KEY = "wordbeat.prefs.v1";
+const THEME_CHOICES = ["auto", "dark", "light", "sepia", "oled"];
+const FONT_STACKS = {
+  serif: 'ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif',
+  sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+  readable: 'Verdana, Tahoma, "Segoe UI", ui-sans-serif, sans-serif',
+};
+const LINE_SPACINGS = { snug: 1.6, normal: 1.95, airy: 2.3 };
+const MEASURES_EM = { narrow: 25, medium: 30, wide: 36 };
+const READER_SIZE_MIN = 16;
+const READER_SIZE_MAX = 30;
+const THEME_BAR_COLORS = { dark: "#101218", light: "#eef0f6", sepia: "#ece0c8", oled: "#000000" };
+const LIGHT_THEMES = ["light", "sepia"];
+const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false };
+
+/** "auto" follows the system; every other choice is itself the theme. */
+function resolveTheme(choice, systemPrefersLight) {
+  if (choice === "auto") return systemPrefersLight ? "light" : "dark";
+  return choice;
+}
+
+function normalizePrefs(raw) {
+  let source = raw;
+  if (typeof raw === "string") {
+    try { source = JSON.parse(raw); } catch (_) { source = null; }
+  }
+  if (!source || typeof source !== "object") source = {};
+
+  const oneOf = (allowed, value, fallback) => (allowed.includes(value) ? value : fallback);
+  const size = typeof source.size === "number" && Number.isFinite(source.size)
+    ? Math.min(READER_SIZE_MAX, Math.max(READER_SIZE_MIN, Math.round(source.size)))
+    : DEFAULT_PREFS.size;
+  return {
+    theme: oneOf(THEME_CHOICES, source.theme, DEFAULT_PREFS.theme),
+    font: oneOf(Object.keys(FONT_STACKS), source.font, DEFAULT_PREFS.font),
+    size,
+    spacing: oneOf(Object.keys(LINE_SPACINGS), source.spacing, DEFAULT_PREFS.spacing),
+    width: oneOf(Object.keys(MEASURES_EM), source.width, DEFAULT_PREFS.width),
+    focus: source.focus === true,
+  };
+}
+
+let prefs = normalizePrefs(readStored(PREFS_KEY));
+const settingsPanel = document.getElementById("settingsPanel");
+const settingsScrim = document.getElementById("scrim");
+const settingsSize = document.getElementById("spSize");
+const settingsSizeValue = document.getElementById("spSizeVal");
+const settingsFocus = document.getElementById("spFocus");
+const systemLightQuery = matchMedia("(prefers-color-scheme: light)");
+
+function applyPrefs() {
+  const root = document.documentElement;
+  const theme = resolveTheme(prefs.theme, systemLightQuery.matches);
+  root.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_BAR_COLORS[theme]);
+  tellNativeShellBarStyle(LIGHT_THEMES.includes(theme));
+
+  root.style.setProperty("--reader-font", FONT_STACKS[prefs.font]);
+  root.style.setProperty("--reader-size", `${prefs.size}px`);
+  root.style.setProperty("--reader-leading", String(LINE_SPACINGS[prefs.spacing]));
+  root.style.setProperty("--measure-em", String(MEASURES_EM[prefs.width]));
+  root.classList.toggle("focus-mode", prefs.focus);
+  syncSettingsPanel();
+}
+
+/** The Android shell owns the status-bar icon colour; the browser has no equivalent. */
+function tellNativeShellBarStyle(lightBackground) {
+  try { window.AndroidTTS?.setSystemBarsLight?.(lightBackground); } catch (error) { console.debug("system bar style not applied", error); }
+}
+
+function updatePref(change) {
+  prefs = normalizePrefs({ ...prefs, ...change });
+  writeStored(PREFS_KEY, JSON.stringify(prefs));
+  applyPrefs();
+}
+
+function syncSettingsPanel() {
+  for (const button of settingsPanel.querySelectorAll("[data-pref]")) {
+    button.setAttribute("aria-checked", String(String(prefs[button.dataset.pref]) === button.dataset.value));
+  }
+  settingsSize.value = String(prefs.size);
+  settingsSizeValue.textContent = `${prefs.size} px`;
+  settingsFocus.setAttribute("aria-checked", String(prefs.focus));
+}
+
+function settingsOpen() {
+  return !settingsPanel.classList.contains("hidden");
+}
+
+function openSettings() {
+  closeTools();
+  closeVoicePanel();
+  settingsPanel.classList.remove("hidden");
+  settingsScrim.classList.remove("hidden");
+  el.btnFont.setAttribute("aria-expanded", "true");
+  settingsPanel.querySelector('[role="radio"][aria-checked="true"]')?.focus();
+}
+
+function closeSettings() {
+  if (!settingsOpen()) return;
+  settingsPanel.classList.add("hidden");
+  settingsScrim.classList.add("hidden");
+  el.btnFont.setAttribute("aria-expanded", "false");
+  (el.btnFont.offsetParent ? el.btnFont : btnMore).focus();
+}
+
+el.btnFont.addEventListener("click", () => (settingsOpen() ? closeSettings() : openSettings()));
+document.getElementById("settingsClose").addEventListener("click", closeSettings);
+document.addEventListener("click", (e) => {
+  if (settingsOpen() && !settingsPanel.contains(e.target) && !el.btnFont.contains(e.target)) closeSettings();
 });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSettings();
+});
+
+settingsPanel.addEventListener("click", (e) => {
+  const option = e.target.closest("[data-pref]");
+  if (option) updatePref({ [option.dataset.pref]: option.dataset.value });
+});
+settingsSize.addEventListener("input", () => updatePref({ size: Number(settingsSize.value) }));
+settingsFocus.addEventListener("click", () => updatePref({ focus: !prefs.focus }));
+
+// Radio groups move with the arrow keys, like native radios.
+settingsPanel.addEventListener("keydown", (e) => {
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  const current = e.target.closest('[role="radio"]');
+  if (!step || !current) return;
+  const group = [...current.parentElement.querySelectorAll('[role="radio"]')];
+  const next = group[(group.indexOf(current) + step + group.length) % group.length];
+  next.focus();
+  next.click();
+  e.preventDefault();
+});
+
+systemLightQuery.addEventListener?.("change", () => { if (prefs.theme === "auto") applyPrefs(); });
+
+/* F toggles focus mode anywhere the letter is not being typed. */
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey || e.key.toLowerCase() !== "f") return;
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || ["TEXTAREA", "INPUT", "SELECT"].includes(a.tagName))) return;
+  e.preventDefault();
+  updatePref({ focus: !prefs.focus });
+  toast(prefs.focus ? "Focus mode on" : "Focus mode off");
+});
+
+applyPrefs();
 
 /* --- speed --- *
  * The slider moves over ladder indices rather than raw rates, so every

@@ -301,3 +301,52 @@ describe("markdown helpers", () => {
     assert.equal(app.stripMarkdown("**bold** and [link](http://x.com) and `code`"), "bold and link and code");
   });
 });
+
+describe("normalizePrefs", () => {
+  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false };
+
+  it("returns the defaults for nothing, garbage or a non-object", () => {
+    assert.deepEqual(plain(app.normalizePrefs(null)), defaults);
+    assert.deepEqual(plain(app.normalizePrefs("not json")), defaults);
+    assert.deepEqual(plain(app.normalizePrefs(42)), defaults);
+  });
+
+  it("accepts a JSON string or an object", () => {
+    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true };
+    assert.deepEqual(plain(app.normalizePrefs(JSON.stringify(saved))), saved);
+    assert.deepEqual(plain(app.normalizePrefs(saved)), saved);
+  });
+
+  it("replaces unknown values one by one", () => {
+    const result = plain(app.normalizePrefs({ theme: "neon", font: "serif", size: 22, width: "huge", focus: "yes" }));
+    assert.equal(result.theme, "dark");
+    assert.equal(result.font, "serif");
+    assert.equal(result.size, 22);
+    assert.equal(result.width, "medium");
+    assert.equal(result.focus, false);
+  });
+
+  it("keeps the size inside the slider range and rounds it", () => {
+    assert.equal(app.normalizePrefs({ size: 4 }).size, 16);
+    assert.equal(app.normalizePrefs({ size: 99 }).size, 30);
+    assert.equal(app.normalizePrefs({ size: 21.6 }).size, 22);
+  });
+
+  it("ignores a size that is not a finite number", () => {
+    assert.equal(app.normalizePrefs({ size: null }).size, 20);
+    assert.equal(app.normalizePrefs({ size: "30" }).size, 20);
+    assert.equal(app.normalizePrefs({ size: NaN }).size, 20);
+  });
+});
+
+describe("resolveTheme", () => {
+  it("follows the system only for auto", () => {
+    assert.equal(app.resolveTheme("auto", true), "light");
+    assert.equal(app.resolveTheme("auto", false), "dark");
+  });
+
+  it("returns every other choice unchanged", () => {
+    assert.equal(app.resolveTheme("sepia", true), "sepia");
+    assert.equal(app.resolveTheme("oled", false), "oled");
+  });
+});
