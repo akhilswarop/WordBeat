@@ -2186,15 +2186,10 @@ class WebSpeechEngine {
   }
 
   /** Re-queues from the exact word last reported as spoken, trimming the
-   *  current chunk down to it — the same trim seekToToken (app, above)
-   *  does for a clicked word. Shared by setRate/setVoice below: neither
-   *  can take effect on an utterance already in progress (a browser
-   *  ignores a rate/voice change mid-utterance the same way Android's
-   *  TextToSpeech does), so both have to re-issue it — but re-issuing
-   *  from cursor's *chunk start*, as this used to, replayed the whole
-   *  current sentence from its beginning on every change. Resuming from
-   *  the word instead makes that re-issue read as a brief blip rather
-   *  than the sentence visibly restarting. */
+   *  current chunk down to it (the same trim seekToToken does for a clicked
+   *  word). A rate or voice change cannot affect an utterance already in
+   *  progress, so setRate/setVoice re-issue it from the current word; from
+   *  the chunk start the whole sentence would visibly restart. */
   _resumeFrom(absoluteChar) {
     let ci = this.chunks.findIndex(
       (c) => absoluteChar >= c.charOffset && absoluteChar < c.charOffset + c.text.length
@@ -2996,10 +2991,9 @@ if (!Engine) {
       el.progressFill.style.width = "100%";
       el.timingMode.classList.remove("show");
     },
-    // True from the moment an utterance is requested until audio for it
-    // is actually heard from — a local voice clears this almost
-    // instantly, but a network voice has a real request round-trip
-    // first, which used to pass with no feedback at all.
+    // True from requesting an utterance until its audio is heard. A network
+    // voice has a real request round-trip before that; a local one clears
+    // it almost at once.
     onBuffering: (b) => el.play.classList.toggle("loading", b),
   });
 
@@ -3092,13 +3086,11 @@ if (!Engine) {
         value: i, label: `${v.name}${v.localService ? "" : " (network)"}`, lang: v.lang, local: v.localService,
       })));
 
-      // A later voiceschanged firing — e.g. while new system voices are still
-      // being installed — used to always re-apply the default heuristic
-      // here, silently overriding a voice the user had already picked
-      // mid-read. Once picked, that choice is now re-resolved against the
-      // fresh list by name+lang (indices aren't stable across getVoices()
-      // calls), so only the first population — or a picked voice actually
-      // disappearing — falls back to the default.
+      // voiceschanged can fire again while system voices are still being
+      // installed. A voice the user picked is re-resolved against the fresh
+      // list by name+lang (indices are not stable across getVoices() calls);
+      // only the first population, or the picked voice disappearing, falls
+      // back to the default.
       let index = userPickedVoice
         ? voices.findIndex(v => v.name === userPickedVoice.name && v.lang === userPickedVoice.lang)
         : -1;
@@ -3159,13 +3151,10 @@ if (!Engine) {
   el.rate.addEventListener("input", () => {
     const r = parseFloat(el.rate.value);
     el.rateVal.textContent = `${+r.toFixed(2)}×`;
-    // The value itself updates immediately — a Play right after adjusting
-    // must use this rate, not whatever the debounce below hasn't applied
-    // yet — but the *restart* setRate triggers when already playing is
-    // debounced. Several quick steps (a fast dial drag, a few D/S presses)
-    // used to restart the current sentence once per step, which read as
-    // constant stuttering instead of one clean speed change; only the
-    // value the reader actually settles on now triggers that restart.
+    // The value applies immediately, so a Play right after adjusting uses
+    // it. Only the restart setRate triggers while playing is debounced:
+    // restarting the sentence once per dial step reads as stuttering, so
+    // only the value the reader settles on restarts it.
     app.engine.rate = r;
     updateProgress(app.renderer.active);   // rate changes the time estimate
     syncSpeedSlider();
@@ -3575,17 +3564,13 @@ function loadTesseract() {
 const OCR_PAGE_WARN_THRESHOLD = 15;
 let ocrCancelled = false;
 
-/** Wired to the Cancel button shown while OCR is running. Only sets a flag
- *  — it deliberately does NOT terminate the worker here. Tesseract.js has
- *  no way to abort a recognize() call already in flight, and terminating
- *  the worker out from under one doesn't reject that pending promise, it
- *  just abandons it: the worker thread is gone, so nothing ever answers
- *  it, and the caller hangs forever awaiting a response that will never
- *  arrive (confirmed live — a cancelled run sat unresolved for minutes).
- *  So cancellation is per-page: the current page finishes normally, the
- *  loop below sees the flag before starting the next one, and the worker
- *  is only ever terminated once nothing is in flight (see the `finally`
- *  in runOcrOnCanvases). */
+/** Wired to the Cancel button shown while OCR is running. It only sets a
+ *  flag and never terminates the worker: Tesseract cannot abort a
+ *  recognize() in flight, and terminating the worker under one leaves its
+ *  promise pending forever. Cancellation is therefore per page: the current
+ *  page finishes, the loop sees the flag before the next one, and
+ *  runOcrOnCanvases terminates the worker in its `finally` once nothing is
+ *  in flight. */
 function cancelOcr() {
   ocrCancelled = true;
 }
@@ -4204,8 +4189,8 @@ el.chapterSelect.addEventListener("change", () => {
  * navigator.clipboard.readText() is gated behind a permission that browsers
  * grant inconsistently — Chrome prompts and remembers the answer, Firefox
  * and Safari refuse it outright, and an installed PWA can land in either
- * camp depending on how it was launched. When it's refused there used to be
- * no way forward: a toast and a dead end.
+ * camp depending on how it was launched. A refusal must not be a dead end,
+ * so there is a fallback.
  *
  * A real user-triggered paste (Ctrl+V, or the OS's Paste menu item) needs
  * no such permission — it's the browser delivering an actual "paste" DOM
@@ -4223,13 +4208,10 @@ Object.assign(pasteCatcher.style, {
 });
 document.body.appendChild(pasteCatcher);
 
-// html is the clipboard's text/html flavour, when present — pasting a
-// rich answer (Copilot, a browser selection) commonly puts a fully
-// formatted HTML payload on the clipboard alongside a text/plain fallback
-// that's been flattened to plain prose, no ** or | left in it at all.
-// Reading only text/plain, as this used to, got the flattened fallback
-// with nothing left for Markdown detection to find, even though the same
-// paste looked perfectly formatted in an app that reads the HTML flavour.
+// html is the clipboard's text/html flavour, when present. A rich answer
+// (Copilot, a browser selection) often carries formatted HTML plus a
+// text/plain fallback flattened to prose with no ** or | left, so Markdown
+// detection needs the HTML flavour to find any structure.
 function handlePastedText(text, html = null) {
   if (!text || !text.trim()) { toast("Clipboard is empty."); return; }
   // Pasting a lone link is an explicit request to read that page, the same
