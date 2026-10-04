@@ -178,6 +178,35 @@ describe("trimLeadingBoilerplate", () => {
   });
 });
 
+describe("detectFormat", () => {
+  const file = (name, type = "") => ({ name, type });
+  const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+  it("recognizes each supported format by extension", () => {
+    assert.equal(app.detectFormat(file("a.docx")), "docx");
+    assert.equal(app.detectFormat(file("a.epub")), "epub");
+    assert.equal(app.detectFormat(file("a.pdf")), "pdf");
+    assert.equal(app.detectFormat(file("a.JPG")), "image");
+    assert.equal(app.detectFormat(file("a.md")), "text");
+  });
+
+  it("falls back to the MIME type when the name has no extension", () => {
+    assert.equal(app.detectFormat(file("shared", DOCX)), "docx");
+    assert.equal(app.detectFormat(file("shared", "application/pdf")), "pdf");
+    assert.equal(app.detectFormat(file("shared", "image/png")), "image");
+    assert.equal(app.detectFormat(file("shared", "text/plain")), "text");
+  });
+
+  it("returns null for anything unsupported", () => {
+    assert.equal(app.detectFormat(file("tool.exe", "application/octet-stream")), null);
+    assert.equal(app.detectFormat(file("anim.gif", "image/gif")), null);
+  });
+
+  it("lets an earlier format claim a file before text does", () => {
+    assert.equal(app.detectFormat(file("scan.pdf", "text/plain")), "pdf");
+  });
+});
+
 describe("markdown helpers", () => {
   it("detects Markdown structure", () => {
     assert.equal(app.looksLikeMarkdown("# Title\n\n- a\n- b"), true);

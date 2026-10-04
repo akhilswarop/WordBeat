@@ -3585,6 +3585,51 @@ function cancelOcr() {
   ocrCancelled = true;
 }
 
+/** Tesseract's blocks > paragraphs > lines > words hierarchy, flattened to
+ *  one array of words per paragraph (reading order is already correct). */
+function* ocrParagraphs(data) {
+  for (const block of data.blocks || []) {
+    for (const paragraph of block.paragraphs || []) {
+      yield (paragraph.lines || []).flatMap((line) => line.words || []);
+    }
+  }
+}
+
+/** The transparent text layer that sits over a page canvas, created on
+ *  first use. */
+function ensureTextLayer(canvas) {
+  const pageEl = canvas.closest(".pdf-page");
+  let layer = pageEl?.querySelector(":scope > .textLayer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "textLayer";
+    pageEl?.appendChild(layer);
+  }
+  return layer;
+}
+
+/** One invisible span laid over a recognized word's bounding box.
+ *  Tesseract reports pixels of the canvas; the page lays out in CSS pixels. */
+function createOcrWordSpan(word, index, dpr) {
+  const { x0, y0, x1, y1 } = word.bbox;
+  const height = Math.max(1, (y1 - y0) / dpr);
+  const span = document.createElement("span");
+  span.className = "w";
+  span.dataset.i = String(index);
+  span.textContent = word.text;
+  Object.assign(span.style, {
+    position: "absolute",
+    left: (x0 / dpr) + "px",
+    top: (y0 / dpr) + "px",
+    width: Math.max(1, (x1 - x0) / dpr) + "px",
+    height: height + "px",
+    fontSize: height + "px",
+    lineHeight: "1",
+    whiteSpace: "pre",
+  });
+  return span;
+}
+
 /** Runs OCR over already-rendered page canvases and builds the same
  *  {text, tokens, spans, rangeHighlighter} shape buildFromDom/
  *  extractPdfOriginalLayout produce, positioning each recognized word as
@@ -3604,9 +3649,20 @@ async function runOcrOnCanvases(canvases, onProgress) {
 
   // Mirrors buildFromDom's endBlock(): a paragraph break between OCR
   // paragraphs, without ever doubling up at a page boundary.
-  const endPara = () => {
+  const endParagraph = () => {
     spoken = spoken.replace(/[ \t]+$/, "");
     if (spoken && !spoken.endsWith("\n\n")) spoken += "\n\n";
+  };
+
+  const appendWord = (word, textLayer) => {
+    if (!word.text) return;
+    if (spoken && !/\s$/.test(spoken)) spoken += " ";
+    const start = spoken.length;
+    const span = createOcrWordSpan(word, tokens.length, dpr);
+    textLayer.appendChild(span);
+    tokens.push({ index: tokens.length, text: word.text, start, end: start + word.text.length });
+    spans.push(span);
+    spoken += word.text;
   };
 
   try {
@@ -3617,47 +3673,10 @@ async function runOcrOnCanvases(canvases, onProgress) {
       const { data } = await worker.recognize(canvases[i], {}, { blocks: true });
       if (ocrCancelled) return null;
 
-      const pageEl = canvases[i].closest(".pdf-page");
-      let textLayerDiv = pageEl?.querySelector(":scope > .textLayer");
-      if (!textLayerDiv) {
-        textLayerDiv = document.createElement("div");
-        textLayerDiv.className = "textLayer";
-        pageEl?.appendChild(textLayerDiv);
-      }
-
-      for (const block of data.blocks || []) {
-        for (const para of block.paragraphs || []) {
-          for (const line of para.lines || []) {
-            for (const word of line.words || []) {
-              const text = word.text;
-              if (!text) continue;
-              if (spoken && !/\s$/.test(spoken)) spoken += " ";
-              const base = spoken.length;
-
-              const span = document.createElement("span");
-              span.className = "w";
-              span.dataset.i = String(tokens.length);
-              span.textContent = text;
-              const { x0, y0, x1, y1 } = word.bbox;
-              Object.assign(span.style, {
-                position: "absolute",
-                left: (x0 / dpr) + "px",
-                top: (y0 / dpr) + "px",
-                width: Math.max(1, (x1 - x0) / dpr) + "px",
-                height: Math.max(1, (y1 - y0) / dpr) + "px",
-                fontSize: Math.max(1, (y1 - y0) / dpr) + "px",
-                lineHeight: "1",
-                whiteSpace: "pre",
-              });
-              textLayerDiv.appendChild(span);
-
-              tokens.push({ index: tokens.length, text, start: base, end: base + text.length });
-              spans.push(span);
-              spoken += text;
-            }
-          }
-          endPara();
-        }
+      const textLayer = ensureTextLayer(canvases[i]);
+      for (const words of ocrParagraphs(data)) {
+        for (const word of words) appendWord(word, textLayer);
+        endParagraph();
       }
     }
   } finally {
@@ -4036,93 +4055,123 @@ async function openEpubChapter(index) {
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-async function importFile(file) {
-  const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
-  const isEpub = /\.epub$/i.test(file.name) || file.type === "application/epub+zip";
-  const isDocx = /\.docx$/i.test(file.name) || file.type === DOCX_MIME;
-  const isText = TEXT_EXT.test(file.name) || file.type.startsWith("text/");
-  const isImage = /\.(jpe?g|png)$/i.test(file.name) || /^image\/(jpeg|png)$/.test(file.type);
+/** First match wins, in this order: a file only reaches a later check if
+ *  no earlier one claims it. */
+const FORMAT_DETECTORS = [
+  ["docx", (file) => /\.docx$/i.test(file.name) || file.type === DOCX_MIME],
+  ["epub", (file) => /\.epub$/i.test(file.name) || file.type === "application/epub+zip"],
+  ["pdf", (file) => /\.pdf$/i.test(file.name) || file.type === "application/pdf"],
+  ["image", (file) => /\.(jpe?g|png)$/i.test(file.name) || /^image\/(jpeg|png)$/.test(file.type)],
+  ["text", (file) => TEXT_EXT.test(file.name) || file.type.startsWith("text/")],
+];
 
-  if (!isPdf && !isEpub && !isDocx && !isText && !isImage) {
+function detectFormat(file) {
+  const match = FORMAT_DETECTORS.find(([, matches]) => matches(file));
+  return match ? match[0] : null;
+}
+
+async function importDocx(file) {
+  toast(`Opening ${file.name}…`, 60000);
+  const tree = await extractDocx(file);
+  showDocument({ tree, label: file.name });
+}
+
+async function importEpub(file) {
+  toast(`Opening ${file.name}…`, 60000);
+  const book = await extractEpub(file);
+  app.epub = { ...book, currentIndex: 0 };
+
+  el.chapterSelect.replaceChildren(
+    ...book.chapters.map((chapter, i) => {
+      const option = document.createElement("option");
+      option.value = String(i);
+      option.textContent = chapter.title;
+      return option;
+    })
+  );
+  el.chapterSelect.classList.toggle("hidden", book.chapters.length < 2);
+
+  openEpubChapter(0);
+  toast(`Loaded ${book.title} · ${book.chapters.length} chapter${book.chapters.length === 1 ? "" : "s"}`);
+}
+
+/** A PDF with no text layer is a scan: OCR it after the user confirms.
+ *  Resolves to the word bundle, or null when the user cancelled or nothing
+ *  was readable (the reason has already been toasted). */
+async function ocrScannedPdf(tree, pages, fileName) {
+  const proceed = await confirmOcr(pages, fileName);
+  if (!proceed) { toast("Import cancelled."); return null; }
+
+  showOcrProgress(`Reading page 1 of ${pages}…`);
+  let result;
+  try {
+    result = await runPdfOcr(tree, (n, total) => showOcrProgress(`Reading page ${n} of ${total}…`));
+  } finally {
+    hideOcrProgress();
+  }
+  if (!result) { toast("OCR cancelled."); return null; }
+  if (!result.tokens.length) { toast("OCR found no readable text in this document."); return null; }
+  return result;
+}
+
+async function importPdf(file) {
+  toast(`Rendering ${file.name}…`, 60000);
+  const layout = await extractPdfOriginalLayout(file, (n, total) => {
+    toast(`Rendering page ${n} of ${total}…`, 60000);
+  });
+  const { tree, pages } = layout;
+  let { text, tokens, spans, rangeHighlighter } = layout;
+
+  if (!tokens.length) {
+    const ocr = await ocrScannedPdf(tree, pages, file.name);
+    if (!ocr) return;
+    ({ text, tokens, spans, rangeHighlighter } = ocr);
+  }
+  showDocument({
+    tree,
+    prebuilt: { text, tokens, spans, rangeHighlighter },
+    label: file.name,
+    message: `Loaded ${file.name} · ${pages} page${pages === 1 ? "" : "s"}`,
+  });
+}
+
+async function importImage(file) {
+  showOcrProgress(`Reading ${file.name}…`);
+  let result;
+  try {
+    result = await extractImageOCR(file);
+  } finally {
+    hideOcrProgress();
+  }
+  if (!result) { toast("OCR cancelled."); return; }
+  if (!result.tokens.length) { toast("OCR found no readable text in this photo."); return; }
+  const { text, tokens, spans, rangeHighlighter } = result;
+  showDocument({ tree: result.tree, prebuilt: { text, tokens, spans, rangeHighlighter }, label: file.name });
+}
+
+async function importText(file) {
+  const raw = await file.text();
+  if (!raw.trim()) { toast("That file is empty."); return; }
+  await loadRaw(raw, file.name, { forceMarkdown: /\.(md|markdown)$/i.test(file.name) });
+}
+
+const IMPORTERS = {
+  docx: importDocx,
+  epub: importEpub,
+  pdf: importPdf,
+  image: importImage,
+  text: importText,
+};
+
+async function importFile(file) {
+  const format = detectFormat(file);
+  if (!format) {
     toast(`Can't read ${file.name} — text, Markdown, PDF, EPUB, Word (.docx), and photos (JPG/PNG) only.`);
     return;
   }
 
   try {
-    if (isDocx) {
-      toast(`Opening ${file.name}…`, 60000);
-      const tree = await extractDocx(file);
-      showDocument({ tree, label: file.name });
-      return;
-    }
-
-    if (isEpub) {
-      toast(`Opening ${file.name}…`, 60000);
-      const book = await extractEpub(file);
-      app.epub = { ...book, currentIndex: 0 };
-
-      el.chapterSelect.replaceChildren(
-        ...book.chapters.map((c, i) => {
-          const o = document.createElement("option");
-          o.value = String(i);
-          o.textContent = c.title;
-          return o;
-        })
-      );
-      el.chapterSelect.classList.toggle("hidden", book.chapters.length < 2);
-
-      openEpubChapter(0);
-      toast(`Loaded ${book.title} · ${book.chapters.length} chapter${book.chapters.length === 1 ? "" : "s"}`);
-      return;
-    }
-
-    if (isPdf) {
-      toast(`Rendering ${file.name}…`, 60000);
-      let { tree, text, tokens, spans, pages, rangeHighlighter } = await extractPdfOriginalLayout(file, (n, total) => {
-        toast(`Rendering page ${n} of ${total}…`, 60000);
-      });
-
-      if (!tokens.length) {
-        const proceed = await confirmOcr(pages, file.name);
-        if (!proceed) { toast("Import cancelled."); return; }
-        showOcrProgress(`Reading page 1 of ${pages}…`);
-        let ocrResult;
-        try {
-          ocrResult = await runPdfOcr(tree, (n, total) => showOcrProgress(`Reading page ${n} of ${total}…`));
-        } finally {
-          hideOcrProgress();
-        }
-        if (!ocrResult) { toast("OCR cancelled."); return; }
-        if (!ocrResult.tokens.length) { toast("OCR found no readable text in this document."); return; }
-        ({ text, tokens, spans, rangeHighlighter } = ocrResult);
-      }
-      showDocument({
-        tree,
-        prebuilt: { text, tokens, spans, rangeHighlighter },
-        label: file.name,
-        message: `Loaded ${file.name} · ${pages} page${pages === 1 ? "" : "s"}`,
-      });
-      return;
-    }
-
-    if (isImage) {
-      showOcrProgress(`Reading ${file.name}…`);
-      let result;
-      try {
-        result = await extractImageOCR(file);
-      } finally {
-        hideOcrProgress();
-      }
-      if (!result) { toast("OCR cancelled."); return; }
-      if (!result.tokens.length) { toast("OCR found no readable text in this photo."); return; }
-      const { text, tokens, spans, rangeHighlighter } = result;
-      showDocument({ tree: result.tree, prebuilt: { text, tokens, spans, rangeHighlighter }, label: file.name });
-      return;
-    }
-
-    const raw = await file.text();
-    if (!raw.trim()) { toast("That file is empty."); return; }
-    loadRaw(raw, file.name, { forceMarkdown: /\.(md|markdown)$/i.test(file.name) });
+    await IMPORTERS[format](file);
   } catch (err) {
     hideOcrProgress();
     const offline = /Failed to fetch|dynamically imported|NetworkError/i.test(err.message || "");
@@ -4399,44 +4448,58 @@ async function articleFromJinaMarkdown(url) {
   return { title, tree, text: tree.textContent };
 }
 
-/** Picks what to show from the HTML-extraction result (null if it found
- *  nothing) and, if that isn't a real article, the Markdown fallback. */
-async function showBestArticle(url, htmlArticle, fetchError) {
-  let best = htmlArticle;
-  if (!isUsableArticle(best)) {
+/** Picks the article to show: the HTML-extraction result (null if it found
+ *  nothing), or the Markdown fallback when that isn't a real article.
+ *  `article` is what to show, null when nothing is worth showing;
+ *  `candidate` is the best thing seen either way, for the error message. */
+async function chooseBestArticle(url, htmlArticle) {
+  let candidate = htmlArticle;
+  if (!isUsableArticle(candidate)) {
     try {
       const md = await articleFromJinaMarkdown(url);
       if (!looksBlocked(md.text) &&
-          (isUsableArticle(md) || !best || countWords(md.text) > countWords(best.text))) best = md;
+          (isUsableArticle(md) || !candidate || countWords(md.text) > countWords(candidate.text))) candidate = md;
     } catch (_) {}
   }
-  const salvageable = best && countWords(best.text) >= MIN_SALVAGE_WORDS && !looksBlocked(best.text);
-  if (!isUsableArticle(best) && !salvageable) {
-    toast(
-      best || !fetchError
-        ? "Couldn't read that page — the site is probably blocking automated readers."
-        : fetchError
-    );
-    return;
-  }
+  const salvageable = candidate && countWords(candidate.text) >= MIN_SALVAGE_WORDS && !looksBlocked(candidate.text);
+  return { article: isUsableArticle(candidate) || salvageable ? candidate : null, candidate };
+}
 
-  const partial = looksPaywalled(best);
+function unreadableMessage(candidate, fetchError) {
+  return candidate || !fetchError
+    ? "Couldn't read that page — the site is probably blocking automated readers."
+    : fetchError;
+}
+
+const PAYWALL_NOTICE = "End of preview. The rest of this article is behind a paywall. Paste the full text to read it all.";
+
+function displayArticle(url, article) {
+  const partial = looksPaywalled(article);
   if (partial) {
     // Part of the tree so it is spoken, not just shown: otherwise the
     // reader goes quiet mid-sentence with no explanation.
-    const note = document.createElement("p");
-    const em = document.createElement("em");
-    em.textContent = "End of preview. The rest of this article is behind a paywall. Paste the full text to read it all.";
-    note.appendChild(em);
-    best.tree.appendChild(note);
+    const notice = document.createElement("p");
+    const emphasis = document.createElement("em");
+    emphasis.textContent = PAYWALL_NOTICE;
+    notice.appendChild(emphasis);
+    article.tree.appendChild(notice);
   }
-  const title = best.title || url;
+  const title = article.title || url;
   showDocument({
-    tree: best.tree,
+    tree: article.tree,
     label: title,
     fullLabel: url,
     message: `Loaded "${title}"${partial ? " — preview only (paywalled)" : ""}`,
   });
+}
+
+async function showBestArticle(url, htmlArticle, fetchError) {
+  const { article, candidate } = await chooseBestArticle(url, htmlArticle);
+  if (!article) {
+    toast(unreadableMessage(candidate, fetchError));
+    return;
+  }
+  displayArticle(url, article);
 }
 
 /** True only when the whole trimmed string is nothing but a link — a
