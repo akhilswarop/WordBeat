@@ -14,13 +14,13 @@
     --paper: #181b23;
     --line: #262a35;
     --text: #e9ebf2;
-    --muted: #838a9c;
+    --muted: #868da0;
     --accent: #6b83ff;
     --accent-ink: #0b0d14;
     --sentence: #262a4d;
     --word: #4a44a8;
     --word-ink: #f2f0ff;
-    --spoken: #5d6475;
+    --word-edge: #b6c0ff;
     --chip: #1f2430;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
     --shadow-lg: 0 4px 12px rgba(0,0,0,.45), 0 16px 40px rgba(0,0,0,.35);
@@ -34,13 +34,13 @@
     --paper: #ffffff;
     --line: #e2e5ee;
     --text: #191b22;
-    --muted: #838a9c;
+    --muted: #626a7f;
     --accent: #2f4bf0;
     --accent-ink: #ffffff;
     --sentence: #e8e6fd;
     --word: #c3bcf9;
     --word-ink: #1a1440;
-    --spoken: #9aa0b0;
+    --word-edge: #2f4bf0;
     --chip: #f3f4f9;
     --shadow-sm: 0 1px 2px rgba(20,25,50,.06);
     --shadow-lg: 0 4px 12px rgba(20,25,50,.08), 0 16px 40px rgba(20,25,50,.10);
@@ -377,13 +377,15 @@
   }
   /* Already-spoken words deliberately keep full contrast — dimming them
      makes a long document look washed out as you read. The class is still
-     applied, so restoring a progress tint is a one-line change:
-       .w.spoken:not(.sentence) { color: var(--spoken); }  */
+     applied, so a progress tint is a one-rule change on .w.spoken. */
+  /* The fill alone is only about 2:1 against the page, so a bright bar under
+     the word carries the marker for anyone who cannot rely on the tint. */
   .w.active {
     background: var(--word);
     color: var(--word-ink);
     border-radius: 4px;
-    box-shadow: -0.16em 0 0 var(--word), 0.16em 0 0 var(--word);
+    box-shadow: -0.16em 0 0 var(--word), 0.16em 0 0 var(--word),
+                0 2px 0 0 var(--word-edge);
   }
   .w:hover:not(.active) { box-shadow: 0 0 0 2px var(--chip); background: var(--chip); }
 
@@ -469,6 +471,7 @@
     content: ""; position: absolute;
     left: 0; right: 0; top: -12px; bottom: -8px;
   }
+  .p-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
   #progressFill {
     height: 100%; width: 0%;
     background: var(--accent); border-radius: 3px;
@@ -766,6 +769,16 @@
     .tb-mid { max-width: 52vw; }
   }
 
+  /* Respect the system "reduce motion" setting: no fades, slides or spinning
+     (the buffering ring stays visible, just still). */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
   /* Touch-sized targets: WCAG 2.2 asks for at least 24px, but a thumb wants
      about 44-48px. Applies on touch screens and on any phone-width layout. */
   @media (pointer: coarse), (max-width: 640px) {
@@ -878,7 +891,7 @@
 </main>
 
 <div class="player">
-  <div class="p-bar" id="seekBar" title="Jump to a position"><div id="progressFill"></div></div>
+  <div class="p-bar" id="seekBar" title="Jump to a position" role="slider" tabindex="0" aria-label="Position in document" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressFill"></div></div>
   <div class="p-times"><span id="tElapsed">0:00</span><span id="tTotal">0:00</span></div>
 
   <div class="p-controls">
@@ -1264,7 +1277,8 @@ class Renderer {
       // page's own vertical position, so it scrolls the window directly
       // and leaves every other scroll container untouched.
       const targetTop = window.scrollY + r.top + r.height / 2 - window.innerHeight / 2;
-      window.scrollTo({ top: targetTop, behavior: "smooth" });
+      const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      window.scrollTo({ top: targetTop, behavior: reduceMotion ? "auto" : "smooth" });
     }
   }
 
@@ -2562,7 +2576,9 @@ const playbackClock = createPlaybackClock({
 function updateProgress(tokenIndex) {
   const total = app.tokens.length || 1;
   const done = Math.max(0, tokenIndex + 1);
-  el.progressFill.style.width = `${(done / total) * 100}%`;
+  const percent = (done / total) * 100;
+  el.progressFill.style.width = `${percent}%`;
+  el.seekBar.setAttribute("aria-valuenow", String(Math.round(percent)));
   playbackClock.setProgress(done, total);
 }
 
@@ -5029,6 +5045,18 @@ function skipSentence(delta) {
 }
 el.back.addEventListener("click", () => skipSentence(-1));
 el.fwd.addEventListener("click", () => skipSentence(1));
+
+/* The seek bar is a slider, so the keyboard can move it too: arrows step by
+   sentence (like the Back/Forward buttons), Home/End jump to either end. */
+el.seekBar.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.altKey || e.metaKey || !app.tokens.length) return;
+  const sentenceStep = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+  if (sentenceStep) skipSentence(sentenceStep);
+  else if (e.key === "Home") app.seekToToken(0);
+  else if (e.key === "End") app.seekToToken(app.tokens.length - 1);
+  else return;
+  e.preventDefault();
+});
 
 /* --- scrub --- */
 el.seekBar.addEventListener("click", (e) => {
