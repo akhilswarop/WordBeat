@@ -4347,6 +4347,26 @@ function isUsableArticle(a) {
   return !!a && countWords(a.text) >= MIN_ARTICLE_WORDS && !looksBlocked(a.text);
 }
 
+/** A paywalled page answers with a real but truncated preview (a Medium
+ *  "Member-only story" gave ~180 words ending mid-sentence), which clears
+ *  the usability checks above and would otherwise be read as if complete,
+ *  then simply stop. Either an explicit paywall marker near the start or
+ *  end, or a short article whose last real paragraph doesn't end like a
+ *  sentence, counts. "Last real paragraph" skips short trailing lines
+ *  (a byline, "Updated Oct 3") that never end in punctuation — The Verge's
+ *  short free articles end on one. */
+const PAYWALL_MARKERS = /member-only story|get unlimited access|read the full story|to continue reading|sign in to read|subscribers only|(article|content) is for subscribers/i;
+function looksPaywalled({ text, tree }) {
+  const t = text.trim();
+  if (PAYWALL_MARKERS.test(t.slice(0, 1500)) || PAYWALL_MARKERS.test(t.slice(-600))) return true;
+  if (countWords(t) >= 400) return false;
+  const paragraphs = [...tree.querySelectorAll("p, li, blockquote")]
+    .map((b) => b.textContent.trim())
+    .filter((s) => countWords(s) >= 8);
+  const last = paragraphs.length ? paragraphs[paragraphs.length - 1] : t;
+  return !/[.!?"”’)\]`]$/.test(last);
+}
+
 /** Readability pass over a fetched page's HTML. Resolves to
  *  { title, tree, text } or null when nothing article-like was found. */
 async function articleFromHtml(url, html) {
@@ -4434,9 +4454,19 @@ async function showBestArticle(url, htmlArticle, fetchError) {
   app.raw = null;   // no raw/rendered toggle for a fetched page
   app.engine?.stop();
   app.renderer.clear();
+  const partial = looksPaywalled(best);
+  if (partial) {
+    // Part of the tree so it is spoken, not just shown: otherwise the
+    // reader goes quiet mid-sentence with no explanation.
+    const note = document.createElement("p");
+    const em = document.createElement("em");
+    em.textContent = "End of preview. The rest of this article is behind a paywall. Paste the full text to read it all.";
+    note.appendChild(em);
+    best.tree.appendChild(note);
+  }
   app.load(null, best.tree);
   setSource(best.title || url, url);
-  toast(`Loaded "${best.title || url}"`);
+  toast(`Loaded "${best.title || url}"${partial ? " — preview only (paywalled)" : ""}`);
 }
 
 /** True only when the whole trimmed string is nothing but a link — a
