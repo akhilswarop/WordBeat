@@ -4279,8 +4279,39 @@ async function fetchHtmlFromWeb(url) {
   throw lastErr;
 }
 
+/** Fandom wikis sit behind a Cloudflare bot challenge that blocks every
+ *  plain page fetch (native and proxy alike), but they are MediaWiki
+ *  installs whose api.php allows cross-origin reads. Returns the article as
+ *  HTML, or null if this isn't a Fandom wiki page or the lookup fails, so
+ *  the normal fetch paths still get a turn. */
+async function fetchMediaWikiHtml(url) {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)fandom\.com$/i.test(u.hostname)) return null;
+    const m = u.pathname.match(/^(\/[a-z-]+)?\/wiki\/(.+)$/i);
+    if (!m) return null;
+    const page = encodeURIComponent(decodeURIComponent(m[2]));
+    const res = await fetch(
+      `${u.origin}${m[1] || ""}/api.php?action=parse&prop=text&format=json&formatversion=2&redirects=1&origin=*&page=${page}`,
+      { signal: AbortSignal.timeout(30000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.parse?.text) return null;
+    const title = String(data.parse.title || "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    return `<!doctype html><html><head><title>${title}</title></head><body><article>${data.parse.text}</article></body></html>`;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function fetchAndReadUrl(url) {
   toast(`Fetching ${url}…`, 60000);
+  const wikiHtml = await fetchMediaWikiHtml(url);
+  if (wikiHtml) {
+    await window.onUrlFetched(url, wikiHtml, null);
+    return;
+  }
   if (window.AndroidTTS?.fetchUrl) {
     window.AndroidTTS.fetchUrl(url);
     return;
