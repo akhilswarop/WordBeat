@@ -362,8 +362,7 @@ try {
     border-color: var(--accent); color: var(--text);
     background: var(--sentence); font-weight: 700;
   }
-  #spSize, #spSync { width: 100%; margin: 2px 0 0; accent-color: var(--accent); }
-  .sp-hint { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  #spSize { width: 100%; margin: 2px 0 0; accent-color: var(--accent); }
   .sp-switch {
     display: flex; align-items: center; gap: 8px; width: 100%;
     appearance: none; border: 0; background: transparent; cursor: pointer;
@@ -389,7 +388,7 @@ try {
   .sp-switch[aria-checked="true"] .sp-track::after {
     transform: translateX(16px); background: var(--accent-ink);
   }
-  .settings-panel button:focus-visible, #spSize:focus-visible, #spSync:focus-visible {
+  .settings-panel button:focus-visible, #spSize:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px;
   }
   .scrim { display: none; position: fixed; inset: 0; z-index: 55; background: rgba(0,0,0,.5); }
@@ -1173,7 +1172,7 @@ try {
     #tools .voice-trigger { height: 48px; }
     .sp-sw-face, .sp-seg button { height: 44px; }
     .sp-switch { min-height: 48px; }
-    #spSize, #spSync { height: 32px; }
+    #spSize { height: 32px; }
   }
 </style>
 
@@ -1402,10 +1401,6 @@ try {
     <button type="button" role="radio" data-pref="spacing" data-value="normal">Normal</button>
     <button type="button" role="radio" data-pref="spacing" data-value="airy">Airy</button>
   </div>
-
-  <div class="sp-label sp-row"><label for="spSync">Highlight delay</label><span id="spSyncVal">0 ms</span></div>
-  <input type="range" id="spSync" min="0" max="800" step="50" value="0" aria-describedby="spSyncHint">
-  <div class="sp-hint" id="spSyncHint">Raise this if the highlight runs ahead of the voice.</div>
 
   <div class="sp-label" id="spWidthLabel">Width</div>
   <div class="sp-seg" role="radiogroup" aria-labelledby="spWidthLabel">
@@ -3114,7 +3109,6 @@ const app = {
   tokens: [],
   chunks: [],
   tokensByChunk: [],
-  _wordEpoch: 0,
   renderer: new Renderer(el.reader),
   engine: null,
 
@@ -3170,26 +3164,7 @@ const app = {
     refreshOutline();
   },
 
-  /** The engine says a word is being spoken; the highlight follows after
-   *  the reader's delay, which makes up for audio that lags its own report.
-   *  Delayed words from before a pause, stop or seek are dropped. */
   onWord(absChar) {
-    const delay = prefs.syncDelay;
-    if (!delay) {
-      this._showWord(absChar);
-      return;
-    }
-    const epoch = this._wordEpoch;
-    setTimeout(() => {
-      if (epoch === this._wordEpoch) this._showWord(absChar);
-    }, delay);
-  },
-
-  dropPendingWords() {
-    this._wordEpoch++;
-  },
-
-  _showWord(absChar) {
     const i = tokenAtChar(this.tokens, absChar);
     if (i < 0) return;
 
@@ -3207,7 +3182,6 @@ const app = {
   seekToToken(tokenIndex) {
     const tok = this.tokens[tokenIndex];
     if (!tok) return;
-    this.dropPendingWords();
 
     let ci = this.chunks.findIndex(
       c => tok.start >= c.charOffset && tok.start < c.charOffset + c.text.length
@@ -3421,30 +3395,14 @@ const LINE_SPACINGS = { snug: 1.6, normal: 1.95, airy: 2.3 };
 const MEASURES_EM = { narrow: 25, medium: 30, wide: 36 };
 const READER_SIZE_MIN = 16;
 const READER_SIZE_MAX = 30;
-const SYNC_DELAY_MAX_MS = 800;
-const SYNC_DELAY_STEP_MS = 50;
-/** Android's engine reports a word as it queues the audio, about a word ahead of what is heard. */
-const ANDROID_SYNC_DELAY_MS = 250;
 const THEME_BAR_COLORS = { dark: "#101218", light: "#eef0f6", sepia: "#ece0c8", oled: "#000000" };
 const LIGHT_THEMES = ["light", "sepia"];
-const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true, syncDelay: 0 };
+const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true };
 
 /** "auto" follows the system; every other choice is itself the theme. */
 function resolveTheme(choice, systemPrefersLight) {
   if (choice === "auto") return systemPrefersLight ? "light" : "dark";
   return choice;
-}
-
-/** The delay a fresh install starts with: only the native Android voice needs one. */
-function defaultSyncDelay() {
-  return typeof window.AndroidTTS === "undefined" ? 0 : ANDROID_SYNC_DELAY_MS;
-}
-
-/** A whole number of steps inside the slider range; anything else gets the platform default. */
-function normalizeSyncDelay(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return defaultSyncDelay();
-  const clamped = Math.min(SYNC_DELAY_MAX_MS, Math.max(0, value));
-  return Math.round(clamped / SYNC_DELAY_STEP_MS) * SYNC_DELAY_STEP_MS;
 }
 
 function normalizePrefs(raw) {
@@ -3466,7 +3424,6 @@ function normalizePrefs(raw) {
     width: oneOf(Object.keys(MEASURES_EM), source.width, DEFAULT_PREFS.width),
     focus: source.focus === true,
     miniPlayer: source.miniPlayer !== false,
-    syncDelay: normalizeSyncDelay(source.syncDelay),
   };
 }
 
@@ -3477,8 +3434,6 @@ const settingsSize = document.getElementById("spSize");
 const settingsSizeValue = document.getElementById("spSizeVal");
 const settingsFocus = document.getElementById("spFocus");
 const settingsMini = document.getElementById("spMini");
-const settingsSync = document.getElementById("spSync");
-const settingsSyncValue = document.getElementById("spSyncVal");
 const systemLightQuery = matchMedia("(prefers-color-scheme: light)");
 
 function applyPrefs() {
@@ -3517,8 +3472,6 @@ function syncSettingsPanel() {
   settingsSizeValue.textContent = `${prefs.size} px`;
   settingsFocus.setAttribute("aria-checked", String(prefs.focus));
   settingsMini.setAttribute("aria-checked", String(prefs.miniPlayer));
-  settingsSync.value = String(prefs.syncDelay);
-  settingsSyncValue.textContent = `${prefs.syncDelay} ms`;
 }
 
 function settingsOpen() {
@@ -3558,7 +3511,6 @@ settingsPanel.addEventListener("click", (e) => {
 settingsSize.addEventListener("input", () => updatePref({ size: Number(settingsSize.value) }));
 settingsFocus.addEventListener("click", () => updatePref({ focus: !prefs.focus }));
 settingsMini.addEventListener("click", () => updatePref({ miniPlayer: !prefs.miniPlayer }));
-settingsSync.addEventListener("input", () => updatePref({ syncDelay: Number(settingsSync.value) }));
 
 // Radio groups move with the arrow keys, like native radios.
 settingsPanel.addEventListener("keydown", (e) => {
@@ -3759,7 +3711,6 @@ function onPlaybackStateChanged(state) {
   renderPlayButton(state);
   if (state === "playing") playbackClock.start();
   else playbackClock.stop();
-  if (state !== "playing") app.dropPendingWords();
   syncPlayerShrink();
 }
 

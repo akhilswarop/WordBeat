@@ -303,7 +303,7 @@ describe("markdown helpers", () => {
 });
 
 describe("normalizePrefs", () => {
-  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true, syncDelay: 0 };
+  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true };
 
   it("returns the defaults for nothing, garbage or a non-object", () => {
     assert.deepEqual(plain(app.normalizePrefs(null)), defaults);
@@ -312,7 +312,7 @@ describe("normalizePrefs", () => {
   });
 
   it("accepts a JSON string or an object", () => {
-    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true, miniPlayer: false, syncDelay: 300 };
+    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true, miniPlayer: false };
     assert.deepEqual(plain(app.normalizePrefs(JSON.stringify(saved))), saved);
     assert.deepEqual(plain(app.normalizePrefs(saved)), saved);
   });
@@ -506,19 +506,5 @@ describe("titleFromText", () => {
     const title = app.titleFromText("x".repeat(100));
     assert.equal(title.length, 60);
     assert.ok(title.endsWith("…"));
-  });
-});
-
-describe("normalizeSyncDelay", () => {
-  it("snaps to the slider steps and stays inside the range", () => {
-    assert.equal(app.normalizeSyncDelay(130), 150);
-    assert.equal(app.normalizeSyncDelay(-40), 0);
-    assert.equal(app.normalizeSyncDelay(5000), 800);
-  });
-
-  it("falls back to the platform default when it is not a number", () => {
-    assert.equal(app.normalizeSyncDelay(undefined), 0);   // no native bridge in tests
-    assert.equal(app.normalizeSyncDelay("200"), 0);
-    assert.equal(app.normalizeSyncDelay(NaN), 0);
   });
 });
