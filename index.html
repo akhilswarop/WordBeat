@@ -1316,27 +1316,34 @@ const isTableRow = (s) => s.includes("|");
 const isTableSeparator = (s) =>
   /^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(\|[ \t]*:?-{2,}:?[ \t]*)*\|?[ \t]*$/.test(s);
 
+const scriptPromises = {};
+
+/** Loads a library's <script> once and resolves to the global it defines.
+ *  A failed load is forgotten so the next use retries (e.g. back online).
+ *  The "Failed to fetch" wording is matched by importFile's offline check. */
+function loadScriptOnce(url, globalName, label) {
+  if (!scriptPromises[url]) {
+    scriptPromises[url] = new Promise((resolve, reject) => {
+      if (window[globalName]) return resolve(window[globalName]);
+      const script = document.createElement("script");
+      script.src = url;
+      script.onload = () => resolve(window[globalName]);
+      script.onerror = () => reject(new Error(`Failed to fetch ${label}`));
+      document.head.appendChild(script);
+    }).catch((err) => { delete scriptPromises[url]; throw err; });
+  }
+  return scriptPromises[url];
+}
+
 const MARKED_URL = "https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js";
-let markedPromise = null;
 
 /** Fetched on first Markdown document only, so plain text stays independent
  *  of it — mirrors loadJSZip below. */
 function loadMarked() {
-  if (!markedPromise) {
-    markedPromise = new Promise((resolve, reject) => {
-      if (window.marked) return resolve(window.marked);
-      const script = document.createElement("script");
-      script.src = MARKED_URL;
-      script.onload = () => resolve(window.marked);
-      script.onerror = () => reject(new Error("Failed to fetch marked"));
-      document.head.appendChild(script);
-    }).catch((err) => { markedPromise = null; throw err; });
-  }
-  return markedPromise;
+  return loadScriptOnce(MARKED_URL, "marked", "marked");
 }
 
 const HLJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js";
-let hljsPromise = null;
 
 /** Fetched only the first time a document actually has a fenced code block
  *  — most Markdown/EPUB/DOCX content never does — mirroring loadMarked
@@ -1346,17 +1353,7 @@ let hljsPromise = null;
  *  fences it, would otherwise get guessed at as some programming language
  *  and mangled. */
 function loadHighlightJs() {
-  if (!hljsPromise) {
-    hljsPromise = new Promise((resolve, reject) => {
-      if (window.hljs) return resolve(window.hljs);
-      const script = document.createElement("script");
-      script.src = HLJS_URL;
-      script.onload = () => resolve(window.hljs);
-      script.onerror = () => reject(new Error("Failed to fetch highlight.js"));
-      document.head.appendChild(script);
-    }).catch((err) => { hljsPromise = null; throw err; });
-  }
-  return hljsPromise;
+  return loadScriptOnce(HLJS_URL, "hljs", "highlight.js");
 }
 
 /** Highlights every fenced code block in `root` that named a real language
@@ -1584,21 +1581,10 @@ function buildFromDom(root) {
  * ------------------------------------------------------------------- */
 
 const JSZIP_URL = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
-let jszipPromise = null;
 
 /** Fetched on first EPUB only, so text/Markdown/PDF stay independent of it. */
 function loadJSZip() {
-  if (!jszipPromise) {
-    jszipPromise = new Promise((resolve, reject) => {
-      if (window.JSZip) return resolve(window.JSZip);
-      const script = document.createElement("script");
-      script.src = JSZIP_URL;
-      script.onload = () => resolve(window.JSZip);
-      script.onerror = () => reject(new Error("Failed to fetch JSZip"));
-      document.head.appendChild(script);
-    }).catch((err) => { jszipPromise = null; throw err; });
-  }
-  return jszipPromise;
+  return loadScriptOnce(JSZIP_URL, "JSZip", "JSZip");
 }
 
 /** Joins an href against the directory the OPF file lives in, collapsing
@@ -3573,23 +3559,12 @@ function loadPdfJs() {
  * ---------------------------------------------------------------------- */
 
 const TESSERACT_URL = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/7.0.0/tesseract.min.js";
-let tesseractPromise = null;
 
 /** Fetched on first OCR use only — a scripted <script> tag, not import(),
  *  since Tesseract's UMD build attaches window.Tesseract the same way
  *  JSZip's does (loadJSZip below), rather than exporting an ES module. */
 function loadTesseract() {
-  if (!tesseractPromise) {
-    tesseractPromise = new Promise((resolve, reject) => {
-      if (window.Tesseract) return resolve(window.Tesseract);
-      const script = document.createElement("script");
-      script.src = TESSERACT_URL;
-      script.onload = () => resolve(window.Tesseract);
-      script.onerror = () => reject(new Error("Failed to fetch Tesseract.js"));
-      document.head.appendChild(script);
-    }).catch((err) => { tesseractPromise = null; throw err; });
-  }
-  return tesseractPromise;
+  return loadScriptOnce(TESSERACT_URL, "Tesseract", "Tesseract.js");
 }
 
 const OCR_PAGE_WARN_THRESHOLD = 15;
@@ -3991,13 +3966,29 @@ async function extractPdfOriginalLayout(file, onProgress) {
 
 /* ------------------------------------------------------------------ */
 
+/** Everything that has to happen before a different document replaces the
+ *  current one: leave any open book, stop speech, clear the page. `raw` is
+ *  the untouched source for the Clean-markup toggle, or null when the
+ *  document has no raw form. */
+function resetReader(raw = null) {
+  exitEpubMode();
+  app.raw = raw;
+  app.engine?.stop();
+  app.renderer.clear();
+}
+
+/** Shows an already-built document tree (docx, PDF, photo, web article). */
+function showDocument({ tree, prebuilt, label, fullLabel = label, message = `Loaded ${label}` }) {
+  resetReader();
+  app.load(null, tree, prebuilt);
+  setSource(label, fullLabel);
+  toast(message);
+}
+
 /** Holds on to the untouched source so the Clean markup toggle can switch
  *  between raw and cleaned without needing the original file again. */
 async function loadRaw(raw, label, { forceMarkdown = false, cleanable = true, note = "", html = null } = {}) {
-  exitEpubMode();
-  app.raw = { text: raw, forceMarkdown, cleanable, html };
-  app.engine?.stop();
-  app.renderer.clear();
+  resetReader({ text: raw, forceMarkdown, cleanable, html });
   const doc = await prepareDoc(raw, { forceMarkdown, cleanable, html });
   if (doc.tree) await highlightCodeBlocks(doc.tree);
   app.load(doc.text, doc.tree);
@@ -4061,13 +4052,7 @@ async function importFile(file) {
     if (isDocx) {
       toast(`Opening ${file.name}…`, 60000);
       const tree = await extractDocx(file);
-      exitEpubMode();
-      app.raw = null;   // no raw/rendered toggle for a converted document
-      app.engine?.stop();
-      app.renderer.clear();
-      app.load(null, tree);
-      setSource(file.name);
-      toast(`Loaded ${file.name}`);
+      showDocument({ tree, label: file.name });
       return;
     }
 
@@ -4111,13 +4096,12 @@ async function importFile(file) {
         if (!ocrResult.tokens.length) { toast("OCR found no readable text in this document."); return; }
         ({ text, tokens, spans, rangeHighlighter } = ocrResult);
       }
-      exitEpubMode();
-      app.raw = null;   // no raw/rendered toggle for a fixed-layout page
-      app.engine?.stop();
-      app.renderer.clear();
-      app.load(null, tree, { text, tokens, spans, rangeHighlighter });
-      setSource(file.name);
-      toast(`Loaded ${file.name} · ${pages} page${pages === 1 ? "" : "s"}`);
+      showDocument({
+        tree,
+        prebuilt: { text, tokens, spans, rangeHighlighter },
+        label: file.name,
+        message: `Loaded ${file.name} · ${pages} page${pages === 1 ? "" : "s"}`,
+      });
       return;
     }
 
@@ -4131,13 +4115,8 @@ async function importFile(file) {
       }
       if (!result) { toast("OCR cancelled."); return; }
       if (!result.tokens.length) { toast("OCR found no readable text in this photo."); return; }
-      exitEpubMode();
-      app.raw = null;
-      app.engine?.stop();
-      app.renderer.clear();
-      app.load(null, result.tree, { text: result.text, tokens: result.tokens, spans: result.spans, rangeHighlighter: result.rangeHighlighter });
-      setSource(file.name);
-      toast(`Loaded ${file.name}`);
+      const { text, tokens, spans, rangeHighlighter } = result;
+      showDocument({ tree: result.tree, prebuilt: { text, tokens, spans, rangeHighlighter }, label: file.name });
       return;
     }
 
@@ -4218,23 +4197,12 @@ function handlePastedText(text, html = null) {
  * ---------------------------------------------------------------------- */
 
 const READABILITY_URL = "https://cdn.jsdelivr.net/npm/@mozilla/readability@0.6.0/Readability.js";
-let readabilityPromise = null;
 
 /** Fetched only the first time a link actually needs its article
  *  extracted, so every other input format stays independent of it —
  *  mirrors loadMarked and loadJSZip above. */
 function loadReadability() {
-  if (!readabilityPromise) {
-    readabilityPromise = new Promise((resolve, reject) => {
-      if (window.Readability) return resolve(window.Readability);
-      const script = document.createElement("script");
-      script.src = READABILITY_URL;
-      script.onload = () => resolve(window.Readability);
-      script.onerror = () => reject(new Error("Failed to fetch Readability"));
-      document.head.appendChild(script);
-    }).catch((err) => { readabilityPromise = null; throw err; });
-  }
-  return readabilityPromise;
+  return loadScriptOnce(READABILITY_URL, "Readability", "Readability");
 }
 
 /** A freshly parsed document's own baseURI is this app's location, not the
@@ -4258,10 +4226,12 @@ function absolutizeUrls(doc, baseUrl) {
  *  then fall back to r.jina.ai, a public CORS-enabled fetcher that returns
  *  the page's raw HTML. That fallback means the link being read is sent to
  *  that third-party service. */
+const JINA_READER = "https://r.jina.ai/";
+
 async function fetchHtmlFromWeb(url) {
   const attempts = [
     () => fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15000) }),
-    () => fetch(`https://r.jina.ai/${url}`, {
+    () => fetch(`${JINA_READER}${url}`, {
       headers: { "X-Return-Format": "html" },
       signal: AbortSignal.timeout(30000),
     }),
@@ -4418,7 +4388,7 @@ function trimLeadingBoilerplate(md) {
  *  browser and returns Markdown, which goes through the same Markdown path
  *  as everything else. Same third-party caveat as fetchHtmlFromWeb. */
 async function articleFromJinaMarkdown(url) {
-  const res = await fetch(`https://r.jina.ai/${url}`, { signal: AbortSignal.timeout(45000) });
+  const res = await fetch(`${JINA_READER}${url}`, { signal: AbortSignal.timeout(45000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const raw = await res.text();
   const marker = raw.indexOf("Markdown Content:");
@@ -4450,10 +4420,6 @@ async function showBestArticle(url, htmlArticle, fetchError) {
     return;
   }
 
-  exitEpubMode();
-  app.raw = null;   // no raw/rendered toggle for a fetched page
-  app.engine?.stop();
-  app.renderer.clear();
   const partial = looksPaywalled(best);
   if (partial) {
     // Part of the tree so it is spoken, not just shown: otherwise the
@@ -4464,9 +4430,13 @@ async function showBestArticle(url, htmlArticle, fetchError) {
     note.appendChild(em);
     best.tree.appendChild(note);
   }
-  app.load(null, best.tree);
-  setSource(best.title || url, url);
-  toast(`Loaded "${best.title || url}"${partial ? " — preview only (paywalled)" : ""}`);
+  const title = best.title || url;
+  showDocument({
+    tree: best.tree,
+    label: title,
+    fullLabel: url,
+    message: `Loaded "${title}"${partial ? " — preview only (paywalled)" : ""}`,
+  });
 }
 
 /** True only when the whole trimmed string is nothing but a link — a
