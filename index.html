@@ -4067,8 +4067,11 @@ if (!Engine) {
     onTimingMode: (mode) => {
       el.timingMode.classList.toggle("show", mode === "estimated");
     },
+    // Reading to the end leaves the same clean slate as Stop: no highlight
+    // left behind, progress back at the start, ready to play again.
     onDone: () => {
-      el.progressFill.style.width = "100%";
+      app.renderer.clear();
+      resetProgress();
       el.timingMode.classList.remove("show");
     },
     // True from requesting an utterance until its audio is heard. A network
