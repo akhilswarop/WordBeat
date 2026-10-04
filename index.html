@@ -7,6 +7,7 @@
 <script id="early-theme">
 // Applies the saved theme before first paint so a light or sepia reader
 // does not flash dark. Mirrors resolveTheme() in the main script.
+document.documentElement.lang = "en";
 try {
   const saved = JSON.parse(localStorage.getItem("wordbeat.prefs.v1")).theme;
   const light = matchMedia("(prefers-color-scheme: light)").matches;
@@ -32,6 +33,7 @@ try {
     --word-ink: #f2f0ff;
     --word-edge: #b6c0ff;
     --chip: #1f2430;
+    --dim-mix: 55%;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
     --shadow-lg: 0 4px 12px rgba(0,0,0,.45), 0 16px 40px rgba(0,0,0,.35);
     --syn-keyword: #ff9d7a;
@@ -52,6 +54,7 @@ try {
     --word-ink: #f2f0ff;
     --word-edge: #b6c0ff;
     --chip: #14161c;
+    --dim-mix: 55%;
     --shadow-sm: 0 1px 2px rgba(0,0,0,.6);
     --shadow-lg: 0 4px 12px rgba(0,0,0,.7), 0 16px 40px rgba(0,0,0,.6);
   }
@@ -69,6 +72,7 @@ try {
     --word-ink: #2a1c0a;
     --word-edge: #9a4a14;
     --chip: #efe3c8;
+    --dim-mix: 72%;
     --shadow-sm: 0 1px 2px rgba(60,40,10,.10);
     --shadow-lg: 0 4px 12px rgba(60,40,10,.12), 0 16px 40px rgba(60,40,10,.14);
     --syn-keyword: #a8431f;
@@ -90,6 +94,7 @@ try {
     --word-ink: #1a1440;
     --word-edge: #2f4bf0;
     --chip: #f3f4f9;
+    --dim-mix: 64%;
     --shadow-sm: 0 1px 2px rgba(20,25,50,.06);
     --shadow-lg: 0 4px 12px rgba(20,25,50,.08), 0 16px 40px rgba(20,25,50,.10);
     --syn-keyword: #c0492a;
@@ -537,7 +542,7 @@ try {
      It reuses the .sentence band, so the fixed-layout PDF text layer (which
      has no band) is untouched. The fade is a short colour/background
      transition, which also softens the hop from word to word. */
-  .focus-mode #reader.has-band { color: color-mix(in srgb, var(--text) 38%, var(--paper)); }
+  .focus-mode #reader.has-band { color: color-mix(in srgb, var(--text) var(--dim-mix), var(--paper)); }
   .focus-mode #reader.has-band .w.sentence:not(.active) { color: var(--text); }
   .w { transition: color .2s, background-color .12s, box-shadow .12s; }
   .textLayer .w { transition: none; }
@@ -1031,6 +1036,7 @@ try {
       right: calc(10px + var(--safe-right));
       flex-direction: column; align-items: stretch; gap: 2px;
       min-width: 208px; padding: 6px;
+      max-height: calc(100dvh - var(--safe-top) - 66px); overflow-y: auto;
       background: var(--paper);
       border: 1px solid var(--line); border-radius: 14px;
       box-shadow: var(--shadow-lg);
@@ -1319,7 +1325,7 @@ try {
   </article>
 </main>
 
-<div class="player">
+<div class="player" role="region" aria-label="Playback controls">
   <div class="p-bar" id="seekBar" title="Jump to a position" role="slider" tabindex="0" aria-label="Position in document" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressFill"></div></div>
   <div class="p-times"><span id="tElapsed">0:00</span><span id="tTotal">0:00</span></div>
 
@@ -1354,7 +1360,7 @@ try {
   <span id="timingMode">estimated timing</span>
 </div>
 
-<div id="drop"><div>Drop a .txt, .md, .pdf, .epub, .docx, or photo (JPG/PNG) to read it</div></div>
+<div id="drop" aria-hidden="true"><div>Drop a .txt, .md, .pdf, .epub, .docx, or photo (JPG/PNG) to read it</div></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <!-- Reading settings: a popover under the top bar on wide screens, a
      bottom sheet on phones (see the 640px media query). Lives outside the
@@ -1414,7 +1420,7 @@ try {
      dial (#speedDial below) — centered on the viewport, not anchored to
      the dial itself, since the dial sits right under the thumb during a
      touch drag and a value shown there would be occluded the whole time. -->
-<div class="rate-bubble" id="rateBubble"><span id="rateBubbleVal">1×</span></div>
+<div class="rate-bubble" id="rateBubble" aria-hidden="true"><span id="rateBubbleVal">1×</span></div>
 
 <div id="clipPrompt" class="hidden" role="status">
   <div id="clipPromptText"></div>
