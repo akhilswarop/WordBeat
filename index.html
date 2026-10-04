@@ -540,12 +540,10 @@ try {
   /* Focus mode dims everything except the sentence being read, by colour
      rather than opacity so the punctuation between the word spans dims too.
      It reuses the .sentence band, so the fixed-layout PDF text layer (which
-     has no band) is untouched. The fade is a short colour/background
-     transition, which also softens the hop from word to word. */
+     has no band) is untouched. */
   .focus-mode #reader.has-band { color: color-mix(in srgb, var(--text) var(--dim-mix), var(--paper)); }
   .focus-mode #reader.has-band .w.sentence:not(.active) { color: var(--text); }
-  .w { transition: color .2s, background-color .12s, box-shadow .12s; }
-  .textLayer .w { transition: none; }
+  
 
   /* Original-layout PDF mode: the canvas is the page itself and pdf.js's
      untouched text runs sit invisibly above it. Playback selects a precise
