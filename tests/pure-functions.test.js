@@ -447,3 +447,64 @@ describe("buildOutline", () => {
     assert.ok(outline[1].text.endsWith("…"));
   });
 });
+
+describe("normalizeTypedLink", () => {
+  it("adds https to a bare domain, with or without a path", () => {
+    assert.equal(app.normalizeTypedLink("example.com"), "https://example.com");
+    assert.equal(app.normalizeTypedLink(" theverge.com/2024/a-story "), "https://theverge.com/2024/a-story");
+  });
+
+  it("leaves full links and ordinary text alone", () => {
+    assert.equal(app.normalizeTypedLink("http://a.com/x"), "http://a.com/x");
+    assert.equal(app.normalizeTypedLink("just some words"), "just some words");
+  });
+});
+
+describe("recent items", () => {
+  const link = (url, at = 1) => ({ kind: "link", url, title: "T", source: "a.com", words: 600, at });
+  const text = (body) => ({ kind: "text", title: "T", source: "pasted text", text: body, words: 100 });
+
+  it("puts the newest first and keeps one entry per document", () => {
+    const list = app.addRecent([link("https://a.com/1"), link("https://a.com/2")], link("https://a.com/1"));
+    assert.deepEqual(plain(list).map((e) => e.url), ["https://a.com/1", "https://a.com/2"]);
+  });
+
+  it("keeps at most five", () => {
+    let list = [];
+    for (let i = 0; i < 8; i++) list = app.addRecent(list, link(`https://a.com/${i}`));
+    assert.equal(list.length, 5);
+    assert.equal(list[0].url, "https://a.com/7");
+  });
+
+  it("treats the same text as one entry", () => {
+    const body = "word ".repeat(40);
+    assert.equal(app.addRecent([text(body)], text(body)).length, 1);
+  });
+
+  it("drops malformed entries when reading storage", () => {
+    const stored = JSON.stringify([link("https://a.com/ok"), link("ftp://a.com/x"), { kind: "link" }, text(""), null, 5]);
+    assert.deepEqual(plain(app.normalizeRecents(stored)).map((e) => e.url), ["https://a.com/ok"]);
+  });
+
+  it("returns an empty list for garbage", () => {
+    assert.deepEqual(plain(app.normalizeRecents("not json")), []);
+    assert.deepEqual(plain(app.normalizeRecents({})), []);
+  });
+
+  it("describes an entry by source and read time", () => {
+    assert.equal(app.recentMeta({ source: "a.com", words: 1740 }), "a.com · 10 min");
+    assert.equal(app.recentMeta({ source: "notes.md", words: 20 }), "notes.md · 1 min");
+  });
+});
+
+describe("titleFromText", () => {
+  it("uses the first non-empty line without heading marks", () => {
+    assert.equal(app.titleFromText("\n\n## Big idea\nbody"), "Big idea");
+  });
+
+  it("shortens a long first line", () => {
+    const title = app.titleFromText("x".repeat(100));
+    assert.equal(title.length, 60);
+    assert.ok(title.endsWith("…"));
+  });
+});

@@ -116,6 +116,10 @@ try {
   }
 
   .hidden { display: none !important; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
 
   /* ---------------------------- top bar ---------------------------- */
 
@@ -776,6 +780,88 @@ try {
     .player.mini { display: flex; }
   }
 
+  /* ----------------------------- welcome ----------------------------- */
+
+  .welcome { display: none; }
+  .paper.welcome-mode .welcome { display: block; }
+  .paper.welcome-mode #reader { display: none; }
+  .wl-head { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+  .wl-mark {
+    flex: none; width: 48px; height: 48px; border-radius: 14px;
+    background: var(--sentence); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .welcome h1 { font-size: 22px; line-height: 1.2; margin: 0 0 3px; font-weight: 700; }
+  .welcome p { margin: 0; color: var(--muted); font-size: 14px; }
+  .wl-link { display: flex; gap: 8px; margin-bottom: 10px; }
+  .wl-link input {
+    flex: 1; min-width: 0; height: 44px; padding: 0 14px;
+    font: inherit; font-size: 14px; color: var(--text);
+    background: var(--chip); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .wl-link input::placeholder { color: var(--muted); }
+  .wl-link input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  .wl-btn {
+    appearance: none; height: 44px; padding: 0 16px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--chip); color: var(--text);
+    font: inherit; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: border-color .12s, transform .1s;
+  }
+  .wl-btn:hover { border-color: var(--accent); }
+  .wl-btn:active { transform: scale(.97); }
+  .wl-btn.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .wl-btn:focus-visible, .wl-quiet:focus-visible, .wl-recent:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .wl-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .wl-drop {
+    border: 1.5px dashed var(--line); border-radius: 12px; padding: 20px 14px;
+    text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 20px;
+  }
+  .wl-recents-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .wl-label { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  .wl-quiet {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    font: inherit; font-size: 12px; color: var(--muted); padding: 6px 4px; border-radius: 6px;
+  }
+  .wl-quiet:hover { color: var(--text); }
+  .wl-quiet.strong { color: var(--accent); font-weight: 600; }
+  .wl-recents ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .wl-recents li { min-width: 0; }
+  .wl-recent {
+    width: 100%; min-width: 0; appearance: none; cursor: pointer; text-align: left;
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--chip); color: var(--text);
+    font: inherit; padding: 9px 11px; transition: border-color .12s;
+  }
+  .wl-recent:hover { border-color: var(--accent); }
+  .wl-recent svg { flex: none; color: var(--muted); }
+  .wl-recent span { min-width: 0; line-height: 1.3; }
+  .wl-recent b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wl-recent small { display: block; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wl-note { font-size: 11.5px !important; margin-top: 8px !important; }
+  .wl-foot {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    margin-top: 20px; font-size: 12px; color: var(--muted);
+  }
+  .wl-foot-actions { display: flex; gap: 8px; }
+  /* With nothing loaded the transport has nothing to control. */
+  .welcome-empty .player { display: none; }
+  .wl-foot kbd {
+    font: inherit; font-size: 11px; color: var(--muted); background: var(--chip);
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px;
+  }
+  @media (max-width: 640px) {
+    .wl-recents ul { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (pointer: coarse) {
+    .wl-keys, .wl-drop { display: none; }
+    .wl-foot { justify-content: flex-end; }
+  }
+
   /* ------------------------ skeleton and outline ------------------------ */
 
   .skeleton { display: none; padding: 4px 0; }
@@ -1099,6 +1185,9 @@ try {
          listed. Harmless to widen: importFile() below re-checks the actual
          filename extension before accepting anything, so this only affects
          which files the OS *lets you tap*, not what the app will load. -->
+    <button class="ic" id="btnHome" data-label="Home" title="Home and recent items" aria-label="Home and recent items">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11 12 4l8 7"/><path d="M6 10v10h4v-6h4v6h4V10"/></svg>
+    </button>
     <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.markdown,.text,.pdf,.epub,.docx,.jpg,.jpeg,.png,text/plain,text/markdown,text/x-markdown,application/octet-stream,application/pdf,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png">
   </div>
 
@@ -1185,6 +1274,41 @@ try {
   </div>
   <textarea id="editor" class="hidden" spellcheck="false"></textarea>
   <article class="paper">
+    <section class="welcome" id="welcome" aria-labelledby="welcomeTitle">
+      <div class="wl-head">
+        <div class="wl-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M8.5 5.6v12.8a1 1 0 0 0 1.52.86l10.2-6.4a1 1 0 0 0 0-1.72L10.02 4.74A1 1 0 0 0 8.5 5.6z"/></svg></div>
+        <div>
+          <h1 id="welcomeTitle">Read anything aloud</h1>
+          <p>Paste a link, open a file, or type some text.</p>
+        </div>
+      </div>
+      <form class="wl-link" id="welcomeForm">
+        <label class="sr-only" for="welcomeUrl">Article link or text</label>
+        <input id="welcomeUrl" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste an article link">
+        <button type="submit" class="wl-btn pri">Read</button>
+      </form>
+      <div class="wl-actions">
+        <button type="button" class="wl-btn" id="welcomeOpen">Open file</button>
+        <button type="button" class="wl-btn" id="welcomePaste">Paste text</button>
+        <button type="button" class="wl-btn" id="welcomeType">Type text</button>
+      </div>
+      <div class="wl-drop">Or drop a PDF, EPUB, DOCX, text file or photo here</div>
+      <div class="wl-recents hidden" id="welcomeRecents">
+        <div class="wl-recents-head">
+          <span class="wl-label">Recent</span>
+          <button type="button" class="wl-quiet" id="welcomeClear">Clear</button>
+        </div>
+        <ul id="welcomeRecentList"></ul>
+        <p class="wl-note">Links and short texts are kept on this device. PDFs and EPUBs are not.</p>
+      </div>
+      <div class="wl-foot">
+        <span class="wl-keys"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> sentence · <kbd>F</kbd> focus</span>
+        <span class="wl-foot-actions">
+          <button type="button" class="wl-quiet hidden" id="welcomeBack">Back to reading</button>
+          <button type="button" class="wl-quiet strong" id="welcomeDemo">Try the demo</button>
+        </span>
+      </div>
+    </section>
     <div class="skeleton" id="skeleton" role="status" aria-live="polite">
       <p class="sk-status" id="skeletonStatus">Fetching article…</p>
       <div class="sk-line"></div><div class="sk-line"></div><div class="sk-line short"></div>
@@ -2990,6 +3114,7 @@ const app = {
    *  discarding the positions and the gap-based spacing this tree's own
    *  spoken-text string already worked out from the PDF's coordinates. */
   load(text, tree = null, prebuilt = null) {
+    setWelcome(false);
     if (prebuilt) {
       this.text = prebuilt.text;
       this.tokens = prebuilt.tokens;
@@ -3127,7 +3252,8 @@ function refreshOutline() {
 function layoutOutline() {
   const paper = document.querySelector(".paper");
   const gutter = paper.getBoundingClientRect().left;
-  const visible = outlineTargets.length > 0 && gutter >= OUTLINE_GUTTER_PX && !el.reader.classList.contains("hidden");
+  const covered = el.reader.classList.contains("hidden") || paper.classList.contains("welcome-mode");
+  const visible = outlineTargets.length > 0 && gutter >= OUTLINE_GUTTER_PX && !covered;
   outlineEl.classList.toggle("show", visible);
   outlineEl.style.left = `${Math.max(8, gutter - OUTLINE_WIDTH_PX - 12)}px`;
 }
@@ -3405,6 +3531,160 @@ document.addEventListener("keydown", (e) => {
 
 applyPrefs();
 
+/* --- welcome screen and recent items ---
+ * Shown while nothing is loaded. Recents remember links (re-fetched on open)
+ * and short texts; PDFs, EPUBs and other binary files cannot be reopened
+ * without the file, so they are not kept. */
+const RECENTS_KEY = "wordbeat.recents.v1";
+const RECENTS_MAX = 5;
+const RECENT_TEXT_MIN_CHARS = 80;
+const RECENT_TEXT_MAX_CHARS = 100000;
+const RECENT_TITLE_MAX = 60;
+const paperEl = document.querySelector(".paper");
+const welcomeEl = document.getElementById("welcome");
+const welcomeUrl = document.getElementById("welcomeUrl");
+const welcomeBack = document.getElementById("welcomeBack");
+const welcomeRecents = document.getElementById("welcomeRecents");
+const welcomeRecentList = document.getElementById("welcomeRecentList");
+let recents = normalizeRecents(readStored(RECENTS_KEY));
+
+/** Turns a typed bare domain into a link; anything else is returned as it is. */
+function normalizeTypedLink(value) {
+  const text = value.trim();
+  const hasScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(text);
+  const looksLikeDomain = /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(text);
+  return !hasScheme && looksLikeDomain ? `https://${text}` : text;
+}
+
+/** First line of a text, without Markdown heading marks, shortened for a list. */
+function titleFromText(text) {
+  const line = text.split("\n").map((part) => part.replace(/^#+\s*/, "").trim()).find(Boolean) || "Untitled";
+  return line.length > RECENT_TITLE_MAX ? `${line.slice(0, RECENT_TITLE_MAX - 1)}…` : line;
+}
+
+/** The stored list with anything malformed or oversized dropped. */
+function normalizeRecents(raw) {
+  let list = raw;
+  if (typeof raw === "string") {
+    try { list = JSON.parse(raw); } catch (_) { list = null; }
+  }
+  if (!Array.isArray(list)) return [];
+  const isText = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max;
+  const valid = list.filter((entry) => {
+    if (!entry || typeof entry.words !== "number" || !isText(entry.title, 400) || !isText(entry.source, 400)) return false;
+    if (entry.kind === "link") return isText(entry.url, 2000) && /^https?:\/\//i.test(entry.url);
+    if (entry.kind === "text") return isText(entry.text, RECENT_TEXT_MAX_CHARS);
+    return false;
+  });
+  return valid.slice(0, RECENTS_MAX);
+}
+
+function recentKey(entry) {
+  return entry.kind === "link" ? entry.url : `${entry.words}|${entry.text.slice(0, 120)}`;
+}
+
+/** Newest first, one entry per document, at most RECENTS_MAX. */
+function addRecent(list, entry) {
+  return [entry, ...list.filter((other) => recentKey(other) !== recentKey(entry))].slice(0, RECENTS_MAX);
+}
+
+/** "theverge.com · 4 min": where it came from and the read time at 1x. */
+function recentMeta(entry) {
+  const minutes = Math.max(1, Math.round(entry.words / (WORDS_PER_SECOND * 60)));
+  return `${entry.source} · ${minutes} min`;
+}
+
+function rememberRecent(entry) {
+  recents = addRecent(recents, entry);
+  writeStored(RECENTS_KEY, JSON.stringify(recents));
+  renderRecents();
+}
+
+function rememberLink(url, title, words) {
+  let source = url;
+  try { source = new URL(url).hostname.replace(/^www\./, ""); } catch (_) { /* keep the raw text */ }
+  rememberRecent({ kind: "link", url, title, source, words });
+}
+
+function rememberText(text, label) {
+  if (text.length < RECENT_TEXT_MIN_CHARS || text.length > RECENT_TEXT_MAX_CHARS) return;
+  rememberRecent({ kind: "text", title: titleFromText(text), source: label, text, words: countWords(text) });
+}
+
+const RECENT_ICONS = {
+  link: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
+  text: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>',
+};
+
+function renderRecents() {
+  welcomeRecents.classList.toggle("hidden", recents.length === 0);
+  welcomeRecentList.replaceChildren(...recents.map((entry, index) => {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "wl-recent";
+    button.dataset.index = String(index);
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("width", "18");
+    icon.setAttribute("height", "18");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "1.8");
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = RECENT_ICONS[entry.kind];
+    const label = document.createElement("span");
+    const title = document.createElement("b");
+    title.textContent = entry.title;
+    const meta = document.createElement("small");
+    meta.textContent = recentMeta(entry);
+    label.append(title, meta);
+    button.append(icon, label);
+    item.append(button);
+    return item;
+  }));
+}
+
+function setWelcome(visible) {
+  paperEl.classList.toggle("welcome-mode", visible);
+  document.documentElement.classList.toggle("welcome-empty", visible && app.tokens.length === 0);
+  if (visible) {
+    renderRecents();
+    welcomeBack.classList.toggle("hidden", app.tokens.length === 0);
+  }
+  layoutOutline();
+}
+
+welcomeRecentList.addEventListener("click", (e) => {
+  const button = e.target.closest(".wl-recent");
+  const entry = button && recents[Number(button.dataset.index)];
+  if (!entry) return;
+  if (entry.kind === "link") fetchAndReadUrl(entry.url);
+  else loadRaw(entry.text, entry.source);
+});
+document.getElementById("welcomeClear").addEventListener("click", () => {
+  recents = [];
+  writeStored(RECENTS_KEY, JSON.stringify(recents));
+  renderRecents();
+});
+document.getElementById("welcomeForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const value = welcomeUrl.value.trim();
+  if (!value) { welcomeUrl.focus(); return; }
+  welcomeUrl.value = "";
+  handlePastedText(normalizeTypedLink(value));
+});
+document.getElementById("welcomeOpen").addEventListener("click", () => document.getElementById("btnOpen").click());
+document.getElementById("welcomePaste").addEventListener("click", () => document.getElementById("btnPaste").click());
+document.getElementById("welcomeType").addEventListener("click", () => { setWelcome(false); el.edit.click(); });
+document.getElementById("welcomeDemo").addEventListener("click", () => loadRaw(SAMPLE, "WordBeat demo", { remember: false }));
+welcomeBack.addEventListener("click", () => setWelcome(false));
+document.getElementById("btnHome").addEventListener("click", () => {
+  if (app.engine?.state === "playing") app.engine.pause();
+  if (!el.editor.classList.contains("hidden")) el.edit.click();
+  setWelcome(true);
+});
+
 /* ---- wiring ---- */
 
 function renderPlayButton(state) {
@@ -3429,6 +3709,10 @@ function onPlaybackStateChanged(state) {
 /** Single entry point for play/pause/resume, shared by the button and Space. */
 function togglePlayback() {
   if (!app.engine) return;
+  if (paperEl.classList.contains("welcome-mode")) {
+    if (app.tokens.length === 0) { toast("Nothing to read yet. Paste a link or open a file."); return; }
+    setWelcome(false);
+  }
   const s = app.engine.state;
   if (s === "playing") app.engine.pause();
   else if (s === "paused") app.engine.resume();
@@ -4777,13 +5061,14 @@ function showDocument({ tree, prebuilt, label, fullLabel = label, message = `Loa
 
 /** Holds on to the untouched source so the Clean markup toggle can switch
  *  between raw and cleaned without needing the original file again. */
-async function loadRaw(raw, label, { forceMarkdown = false, cleanable = true, note = "", html = null } = {}) {
+async function loadRaw(raw, label, { forceMarkdown = false, cleanable = true, note = "", html = null, remember = true } = {}) {
   resetReader({ text: raw, forceMarkdown, cleanable, html });
   const doc = await prepareDoc(raw, { forceMarkdown, cleanable, html });
   if (doc.tree) await highlightCodeBlocks(doc.tree);
   app.load(doc.text, doc.tree);
   setSource(label);
   toast(`Loaded ${label}${note}`);
+  if (remember) rememberText(raw, label);
 }
 
 /** Hides the chapter picker and drops the parsed book. Called at the start
@@ -5113,6 +5398,7 @@ let requestedUrl = null;
 function showFetching(active, url = "") {
   document.querySelector(".paper").classList.toggle("fetching", active);
   if (!active) return;
+  setWelcome(false);
   let host = url;
   try { host = new URL(url).hostname.replace(/^www\./, ""); } catch (_) { /* show the raw text */ }
   document.getElementById("skeletonStatus").textContent = `Fetching ${host}…`;
@@ -5152,7 +5438,10 @@ window.onUrlFetched = async function (url, html, error) {
   try {
     await showBestArticle(url, article, error);
   } finally {
-    if (url === requestedUrl) showFetching(false);
+    if (url === requestedUrl) {
+      showFetching(false);
+      if (app.tokens.length === 0) setWelcome(true);
+    }
   }
 };
 
@@ -5301,6 +5590,7 @@ function displayArticle(url, article) {
     fullLabel: url,
     message: `Loaded "${title}"${partial ? " — preview only (paywalled)" : ""}`,
   });
+  rememberLink(url, title, countWords(article.text || ""));
 }
 
 async function showBestArticle(url, htmlArticle, fetchError) {
@@ -5813,8 +6103,7 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-app.raw = { text: SAMPLE, forceMarkdown: false, cleanable: true };
-app.load(SAMPLE);
+setWelcome(true);
 
 // Browsers restore form state across a reload, and some do it without
 // firing `input` — which would leave the slider, its label, the speed
