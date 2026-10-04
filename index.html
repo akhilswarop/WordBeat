@@ -528,7 +528,9 @@
     cursor: ns-resize; user-select: none; touch-action: none;
     border-radius: 50%;
   }
-  .dial svg { position: absolute; inset: 0; transform: rotate(135deg); }
+  /* margin: auto centres the fixed-size ring when the dial box is larger
+     than it (the touch-sized dial is 48px, the ring 42px). */
+  .dial svg { position: absolute; inset: 0; margin: auto; transform: rotate(135deg); }
   .dial-track {
     fill: none; stroke: var(--line); stroke-width: 3.5; stroke-linecap: round;
   }
