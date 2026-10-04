@@ -4199,6 +4199,9 @@ document.body.appendChild(pasteCatcher);
 // paste looked perfectly formatted in an app that reads the HTML flavour.
 function handlePastedText(text, html = null) {
   if (!text || !text.trim()) { toast("Clipboard is empty."); return; }
+  // Pasting a lone link is an explicit request to read that page, the same
+  // as sharing it on Android.
+  if (looksLikeBareUrl(text)) { fetchAndReadUrl(text.trim()); return; }
   loadRaw(text, "pasted text", {
     note: ` · ${text.length.toLocaleString()} characters`,
     html,
@@ -4206,12 +4209,12 @@ function handlePastedText(text, html = null) {
 }
 
 /* --------------------------- web articles --------------------------- *
- * A shared or pasted link is fetched natively (see fetchUrl in
+ * A shared or pasted link is fetched natively on Android (see fetchUrl in
  * TtsBridge.java) — CORS blocks an arbitrary cross-origin fetch from the
  * page's own JS, but that is a browser restriction, not a limit on the
- * native HTTP request the Android side makes instead. There is no
- * equivalent path on desktop, so this whole section is Android-only;
- * fetchAndReadUrl says so plainly rather than failing silently.
+ * native HTTP request the Android side makes instead. On the web the
+ * same HTML is obtained by fetchHtmlFromWeb below, and both paths then
+ * share onUrlFetched's Readability extraction.
  * ---------------------------------------------------------------------- */
 
 const READABILITY_URL = "https://cdn.jsdelivr.net/npm/@mozilla/readability@0.6.0/Readability.js";
@@ -4250,13 +4253,44 @@ function absolutizeUrls(doc, baseUrl) {
   });
 }
 
-function fetchAndReadUrl(url) {
-  if (!window.AndroidTTS?.fetchUrl) {
-    toast("Reading a web page needs the Android app.");
+/** Desktop/web has no native HTTP layer, so CORS applies: try a direct
+ *  fetch first (works for sites that allow it, sends the URL nowhere else),
+ *  then fall back to r.jina.ai, a public CORS-enabled fetcher that returns
+ *  the page's raw HTML. That fallback means the link being read is sent to
+ *  that third-party service. */
+async function fetchHtmlFromWeb(url) {
+  const attempts = [
+    () => fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15000) }),
+    () => fetch(`https://r.jina.ai/${url}`, {
+      headers: { "X-Return-Format": "html" },
+      signal: AbortSignal.timeout(30000),
+    }),
+  ];
+  let lastErr = null;
+  for (const attempt of attempts) {
+    try {
+      const res = await attempt();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      if (html.trim()) return html;
+      throw new Error("empty response");
+    } catch (err) { lastErr = err; }
+  }
+  throw lastErr;
+}
+
+async function fetchAndReadUrl(url) {
+  toast(`Fetching ${url}…`, 60000);
+  if (window.AndroidTTS?.fetchUrl) {
+    window.AndroidTTS.fetchUrl(url);
     return;
   }
-  toast(`Fetching ${url}…`, 60000);
-  window.AndroidTTS.fetchUrl(url);
+  try {
+    const html = await fetchHtmlFromWeb(url);
+    await window.onUrlFetched(url, html, null);
+  } catch (err) {
+    toast(`Couldn't fetch that page: ${err.message}`);
+  }
 }
 
 /** Called by TtsBridge.fetchUrl's native callback — see the JSDoc there
@@ -4405,6 +4439,46 @@ function dismissClipPrompt(accept) {
   }
   pendingClip = null;
 }
+
+/** Web counterpart to checkClipboardOnResume: when the tab regains focus
+ *  and the clipboard holds a link that hasn't been handled yet, read it
+ *  without any click. Only runs once the browser has already granted
+ *  clipboard-read (the Paste button's first use triggers that prompt) so
+ *  it never springs a permission dialog on its own. A link that arrives
+ *  mid-read asks first instead of replacing what's playing. The last
+ *  handled link is remembered across reloads so a stale one doesn't
+ *  re-load every time the app opens. */
+const LAST_CLIP_URL_KEY = "wordbeat.lastClipUrl";
+async function checkClipboardOnFocusWeb() {
+  if (window.AndroidTTS || location.protocol === "file:") return;
+  if (!navigator.clipboard?.readText || !navigator.permissions?.query) return;
+  if (!document.hasFocus()) return;
+  try {
+    const perm = await navigator.permissions.query({ name: "clipboard-read" });
+    if (perm.state !== "granted") return;
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!looksLikeBareUrl(text)) return;
+    let last = null;
+    try { last = localStorage.getItem(LAST_CLIP_URL_KEY); } catch (_) {}
+    if (text === last || text === lastClipPrompt) return;
+    try { localStorage.setItem(LAST_CLIP_URL_KEY, text); } catch (_) {}
+    lastClipPrompt = text;
+    if (app.engine?.state === "playing") {
+      pendingClip = { text, html: null, isUrl: true };
+      clipPromptText.textContent = `Fetch and read ${text}?`;
+      clipPrompt.classList.remove("hidden");
+    } else {
+      fetchAndReadUrl(text);
+    }
+  } catch (_) {
+    // Permission revoked, or the browser refused a background read.
+  }
+}
+window.addEventListener("focus", checkClipboardOnFocusWeb);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkClipboardOnFocusWeb();
+});
+checkClipboardOnFocusWeb();
 
 document.getElementById("clipPromptPaste").addEventListener("click", () => dismissClipPrompt(true));
 document.getElementById("clipPromptDismiss").addEventListener("click", () => dismissClipPrompt(false));
