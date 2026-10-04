@@ -422,3 +422,28 @@ describe("swipeDirection", () => {
     assert.equal(app.swipeDirection(start, { x: 100, y: 180, t: 200 }), 0);
   });
 });
+
+describe("buildOutline", () => {
+  const h = (level, text) => ({ level, text });
+
+  it("returns nothing when there are too few headings to help", () => {
+    assert.deepEqual(plain(app.buildOutline([h(1, "A"), h(2, "B")])), []);
+  });
+
+  it("lists headings with a depth relative to the shallowest one", () => {
+    const outline = plain(app.buildOutline([h(2, "Intro"), h(3, "Detail"), h(2, "Next")]));
+    assert.deepEqual(outline.map((i) => [i.text, i.depth]), [["Intro", 0], ["Detail", 1], ["Next", 0]]);
+  });
+
+  it("skips empty headings and levels deeper than three, keeping source indexes", () => {
+    const outline = plain(app.buildOutline([h(1, "One"), h(4, "Deep"), h(2, "  "), h(2, "Two"), h(3, "Three")]));
+    assert.deepEqual(outline.map((i) => i.index), [0, 3, 4]);
+  });
+
+  it("collapses whitespace and shortens long titles", () => {
+    const outline = plain(app.buildOutline([h(1, "A\n  b"), h(1, "x".repeat(100)), h(1, "C")]));
+    assert.equal(outline[0].text, "A b");
+    assert.equal(outline[1].text.length, 60);
+    assert.ok(outline[1].text.endsWith("…"));
+  });
+});

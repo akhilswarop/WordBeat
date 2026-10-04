@@ -776,6 +776,46 @@ try {
     .player.mini { display: flex; }
   }
 
+  /* ------------------------ skeleton and outline ------------------------ */
+
+  .skeleton { display: none; padding: 4px 0; }
+  .paper.fetching #reader { display: none; }
+  .paper.fetching .skeleton { display: block; }
+  .sk-status { font-size: 13px; color: var(--muted); margin: 0 0 1.6em; }
+  .sk-line {
+    height: .9em; border-radius: 6px; margin: 0 0 1.1em;
+    background: linear-gradient(90deg, var(--chip) 25%, var(--line) 50%, var(--chip) 75%);
+    background-size: 200% 100%; animation: sk-shimmer 1.4s linear infinite;
+  }
+  .sk-line.short { width: 62%; }
+  .sk-gap { height: 1.4em; }
+  @keyframes sk-shimmer { to { background-position: -200% 0; } }
+
+  /* Section list beside the page for documents with headings. Hidden unless
+     the gutter beside the paper is wide enough (positioned in script). */
+  .outline {
+    display: none; position: fixed; z-index: 10;
+    top: calc(var(--safe-top) + 76px); width: 176px;
+    max-height: calc(100dvh - 180px); overflow-y: auto;
+  }
+  @media (min-width: 1100px) { .outline.show { display: block; } }
+  .outline-title { font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 0 10px 6px; }
+  .outline button {
+    display: block; width: 100%; text-align: left; appearance: none;
+    border: 0; border-left: 2px solid transparent; background: transparent;
+    color: var(--muted); font: inherit; font-size: 12.5px; line-height: 1.35;
+    padding: 6px 10px; border-radius: 0 7px 7px 0; cursor: pointer;
+  }
+  .outline button:hover { background: var(--chip); color: var(--text); }
+  .outline button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .outline button[aria-current="true"] {
+    border-left-color: var(--accent); background: var(--sentence);
+    color: var(--text); font-weight: 600;
+  }
+  .outline button.depth1 { padding-left: 20px; }
+  .outline button.depth2 { padding-left: 30px; }
+  #reader.rich :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 76px; }
+
   /* --------------------------- overlays ---------------------------- */
 
   #drop {
@@ -990,6 +1030,26 @@ try {
       display: block; width: 36px; height: 4px; border-radius: 2px;
       background: var(--line); margin: 0 auto 6px;
     }
+
+    /* The tools list becomes a bottom sheet. The dimming is a huge box-shadow
+       because #tools lives inside the sticky header, whose stacking context
+       would keep a separate scrim beneath the player. */
+    #tools {
+      top: auto; left: 0; right: 0; bottom: 0; min-width: 0;
+      max-height: 80dvh; overflow-y: auto;
+      border-width: 1px 0 0; border-radius: 20px 20px 0 0;
+      padding: 6px 12px calc(14px + var(--safe-bottom));
+    }
+    #tools.open {
+      box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .5);
+      animation: sheet-up .22s ease-out;
+    }
+    #tools.open::before {
+      content: ""; order: -1; flex: none;
+      width: 36px; height: 4px; border-radius: 2px;
+      background: var(--line); margin: 4px auto 8px;
+    }
+    .tools-open .player { visibility: hidden; }
   }
 
   /* Respect the system "reduce motion" setting: no fades, slides or spinning
@@ -999,6 +1059,14 @@ try {
       animation-duration: .01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: .01ms !important;
+    }
+  }
+
+  /* Wide windows have room for words next to the three main actions. */
+  @media (min-width: 1360px) {
+    #btnOpen, #btnPaste, #btnEdit { width: auto; padding: 0 11px; gap: 7px; }
+    #btnOpen::after, #btnPaste::after, #btnEdit::after {
+      content: attr(data-label); font-size: 12.5px; font-weight: 500; color: var(--text);
     }
   }
 
@@ -1046,7 +1114,7 @@ try {
       <button class="ic" id="btnPaste" data-label="Paste" title="Paste from clipboard" aria-label="Paste from clipboard">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="4" width="10" height="16" rx="2"/><path d="M10 4V3h4v1"/></svg>
       </button>
-      <button class="ic" id="btnEdit" data-label="Edit text" title="Edit text" aria-label="Edit text">
+      <button class="ic" id="btnEdit" data-label="Edit text" title="Edit text" aria-label="Edit text" aria-pressed="false">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/></svg>
       </button>
       <button class="ic" id="btnStop" data-label="Stop" title="Stop" aria-label="Stop">
@@ -1108,13 +1176,23 @@ try {
  </div>
 </header>
 
+<nav class="outline" id="outline" aria-label="Outline"></nav>
+
 <main>
   <div id="unsupported" class="banner hidden">
     This browser doesn't expose the Web Speech API, so playback is unavailable.
     Chrome, Edge, and Safari support it.
   </div>
   <textarea id="editor" class="hidden" spellcheck="false"></textarea>
-  <article class="paper"><div id="reader"></div></article>
+  <article class="paper">
+    <div class="skeleton" id="skeleton" role="status" aria-live="polite">
+      <p class="sk-status" id="skeletonStatus">Fetching article…</p>
+      <div class="sk-line"></div><div class="sk-line"></div><div class="sk-line short"></div>
+      <div class="sk-gap"></div>
+      <div class="sk-line"></div><div class="sk-line"></div><div class="sk-line"></div><div class="sk-line short"></div>
+    </div>
+    <div id="reader"></div>
+  </article>
 </main>
 
 <div class="player">
@@ -2951,6 +3029,7 @@ const app = {
 
     if (this.tokens.length === 0) this.renderer.showEmptyNotice();
     resetProgress();
+    refreshOutline();
   },
 
   onWord(absChar) {
@@ -2995,6 +3074,88 @@ const app = {
     this.engine.speak(trimmed, { startIndex: 0, tokensByChunk: trimmedTokens });
   },
 };
+
+/* --- outline: a section list beside the page ---
+ * Built from the h1-h3 headings of the rendered document, so it appears for
+ * Markdown, Word and EPUB content and never for plain text. */
+const OUTLINE_MIN_ITEMS = 3;
+const OUTLINE_MAX_ITEMS = 60;
+const OUTLINE_LABEL_MAX = 60;
+const OUTLINE_MAX_LEVEL = 3;
+const OUTLINE_GUTTER_PX = 200;
+const OUTLINE_WIDTH_PX = 176;
+const OUTLINE_CURRENT_OFFSET_PX = 120;
+const outlineEl = document.getElementById("outline");
+let outlineTargets = [];
+let outlineFrame = 0;
+
+/** Rail entries for heading-like {level, text} objects; none when there are too few to help. */
+function buildOutline(headings) {
+  const items = [];
+  headings.forEach((heading, index) => {
+    const text = heading.text.replace(/\s+/g, " ").trim();
+    if (!text || heading.level > OUTLINE_MAX_LEVEL) return;
+    const label = text.length > OUTLINE_LABEL_MAX ? `${text.slice(0, OUTLINE_LABEL_MAX - 1)}…` : text;
+    items.push({ index, level: heading.level, text: label });
+  });
+  if (items.length < OUTLINE_MIN_ITEMS) return [];
+  const shallowest = Math.min(...items.map((item) => item.level));
+  return items.slice(0, OUTLINE_MAX_ITEMS).map((item) => ({ ...item, depth: item.level - shallowest }));
+}
+
+function refreshOutline() {
+  const headings = [...el.reader.querySelectorAll("h1, h2, h3")];
+  const items = buildOutline(headings.map((node) => ({ level: Number(node.tagName[1]), text: node.textContent })));
+  outlineTargets = items.map((item) => headings[item.index]);
+
+  const title = document.createElement("div");
+  title.className = "outline-title";
+  title.textContent = "Outline";
+  const buttons = items.map((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `depth${item.depth}`;
+    button.textContent = item.text;
+    return button;
+  });
+  outlineEl.replaceChildren(...(items.length ? [title, ...buttons] : []));
+  layoutOutline();
+  updateOutlineCurrent();
+}
+
+/** Shows the rail only when the gutter beside the paper has room for it. */
+function layoutOutline() {
+  const paper = document.querySelector(".paper");
+  const gutter = paper.getBoundingClientRect().left;
+  const visible = outlineTargets.length > 0 && gutter >= OUTLINE_GUTTER_PX && !el.reader.classList.contains("hidden");
+  outlineEl.classList.toggle("show", visible);
+  outlineEl.style.left = `${Math.max(8, gutter - OUTLINE_WIDTH_PX - 12)}px`;
+}
+
+function updateOutlineCurrent() {
+  if (!outlineEl.classList.contains("show")) return;
+  let current = 0;
+  outlineTargets.forEach((node, i) => {
+    if (node.getBoundingClientRect().top <= OUTLINE_CURRENT_OFFSET_PX) current = i;
+  });
+  outlineEl.querySelectorAll("button").forEach((button, i) => {
+    if (i === current) button.setAttribute("aria-current", "true");
+    else button.removeAttribute("aria-current");
+  });
+}
+
+outlineEl.addEventListener("click", (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  const index = [...outlineEl.querySelectorAll("button")].indexOf(button);
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  outlineTargets[index]?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+});
+window.addEventListener("scroll", () => {
+  cancelAnimationFrame(outlineFrame);
+  outlineFrame = requestAnimationFrame(updateOutlineCurrent);
+}, { passive: true });
+window.addEventListener("resize", layoutOutline);
 
 /* --- player: shrinking and swiping ---
  * The card shrinks to a pill after a few idle seconds of playback and grows
@@ -3156,6 +3317,7 @@ function applyPrefs() {
   root.classList.toggle("focus-mode", prefs.focus);
   syncSettingsPanel();
   syncPlayerShrink();
+  layoutOutline();
 }
 
 /** The Android shell owns the status-bar icon colour; the browser has no equivalent. */
@@ -3789,16 +3951,26 @@ el.edit.addEventListener("click", () => {
     loadRaw(el.editor.value, "edited text");
     el.editor.classList.add("hidden");
     el.reader.classList.remove("hidden");
-    el.edit.textContent = "Edit text";
+    showEditing(false);
   } else {
     // Show the untouched source, not the cleaned rendering — otherwise
     // editing would silently bake the stripping into the text.
     el.editor.value = app.raw ? app.raw.text : app.text;
     el.editor.classList.remove("hidden");
     el.reader.classList.add("hidden");
-    el.edit.textContent = "Done";
+    showEditing(true);
   }
 });
+
+/** Edit and Done are the same button; its icon stays and its label follows the mode. */
+function showEditing(editing) {
+  const label = editing ? "Done" : "Edit text";
+  el.edit.dataset.label = label;
+  el.edit.title = label;
+  el.edit.setAttribute("aria-label", editing ? "Done editing" : "Edit text");
+  el.edit.setAttribute("aria-pressed", String(editing));
+  refreshOutline();
+}
 
 el.clean.addEventListener("change", async () => {
   if (!app.raw) return;
@@ -4937,8 +5109,18 @@ async function fetchMediaWikiHtml(url) {
 // finishes later is dropped.
 let requestedUrl = null;
 
+/** Placeholder lines stand in for the page while a link is being fetched. */
+function showFetching(active, url = "") {
+  document.querySelector(".paper").classList.toggle("fetching", active);
+  if (!active) return;
+  let host = url;
+  try { host = new URL(url).hostname.replace(/^www\./, ""); } catch (_) { /* show the raw text */ }
+  document.getElementById("skeletonStatus").textContent = `Fetching ${host}…`;
+}
+
 async function fetchAndReadUrl(url) {
   requestedUrl = url;
+  showFetching(true, url);
   toast(`Fetching ${url}…`, STICKY_TOAST_MS);
   const wikiHtml = await fetchMediaWikiHtml(url);
   if (wikiHtml) {
@@ -4967,7 +5149,11 @@ window.onUrlFetched = async function (url, html, error) {
       console.debug("Readability extraction failed", err);
     }
   }
-  await showBestArticle(url, article, error);
+  try {
+    await showBestArticle(url, article, error);
+  } finally {
+    if (url === requestedUrl) showFetching(false);
+  }
 };
 
 /** Sites behind a bot wall (Cloudflare, CloudFront, a login gate) answer a
@@ -5410,12 +5596,14 @@ const btnMore = document.getElementById("btnMore");
 
 function closeTools() {
   tools.classList.remove("open");
+  document.documentElement.classList.remove("tools-open");
   btnMore.setAttribute("aria-expanded", "false");
 }
 
 btnMore.addEventListener("click", (e) => {
   e.stopPropagation();
   const open = tools.classList.toggle("open");
+  document.documentElement.classList.toggle("tools-open", open);
   btnMore.setAttribute("aria-expanded", String(open));
 });
 
