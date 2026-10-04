@@ -4323,7 +4323,13 @@ async function fetchMediaWikiHtml(url) {
   }
 }
 
+// Fetches take seconds and can overlap (a paste, then the focus detector).
+// Only the link asked for last may replace the document; an older fetch that
+// finishes later is dropped.
+let requestedUrl = null;
+
 async function fetchAndReadUrl(url) {
+  requestedUrl = url;
   toast(`Fetching ${url}…`, STICKY_TOAST_MS);
   const wikiHtml = await fetchMediaWikiHtml(url);
   if (wikiHtml) {
@@ -4504,6 +4510,7 @@ function displayArticle(url, article) {
 
 async function showBestArticle(url, htmlArticle, fetchError) {
   const { article, candidate } = await chooseBestArticle(url, htmlArticle);
+  if (url !== requestedUrl) return;
   if (!article) {
     toast(unreadableMessage(candidate, fetchError));
     return;
