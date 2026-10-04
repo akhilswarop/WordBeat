@@ -4316,53 +4316,128 @@ async function fetchAndReadUrl(url) {
     window.AndroidTTS.fetchUrl(url);
     return;
   }
-  try {
-    const html = await fetchHtmlFromWeb(url);
-    await window.onUrlFetched(url, html, null);
-  } catch (err) {
-    toast(`Couldn't fetch that page: ${err.message}`);
-  }
+  let html = null, error = null;
+  try { html = await fetchHtmlFromWeb(url); }
+  catch (err) { error = `Couldn't fetch that page: ${err.message}`; }
+  await window.onUrlFetched(url, html, error);
 }
 
 /** Called by TtsBridge.fetchUrl's native callback — see the JSDoc there
  *  for why this has to be async rather than a return value. */
 window.onUrlFetched = async function (url, html, error) {
-  if (error) { toast(error); return; }
-  try {
-    const articleDoc = new DOMParser().parseFromString(html, "text/html");
-    absolutizeUrls(articleDoc, url);
-
-    const Readability = await loadReadability();
-    const article = new Readability(articleDoc).parse();
-    if (!article?.content || !article.textContent.trim()) {
-      toast("Couldn't find readable article content on that page.");
-      return;
-    }
-
-    const contentDoc = new DOMParser().parseFromString(article.content, "text/html");
-    // Readability drops the article's own <h1> when it duplicates the
-    // title it already detected, which is correct for display (setSource
-    // already shows it in the toolbar) but would mean the headline is
-    // simply never spoken — putting it back here is what makes a read of
-    // the article actually start with its title, the way a person would.
-    if (article.title) {
-      const h1 = contentDoc.createElement("h1");
-      h1.textContent = article.title;
-      contentDoc.body.insertBefore(h1, contentDoc.body.firstChild);
-    }
-    const tree = sanitizeHtmlDoc(contentDoc, (src) => (SAFE_IMAGE.test(src) ? src : null));
-
-    exitEpubMode();
-    app.raw = null;   // no raw/rendered toggle for a fetched page
-    app.engine?.stop();
-    app.renderer.clear();
-    app.load(null, tree);
-    setSource(article.title || url, url);
-    toast(`Loaded "${article.title || url}"`);
-  } catch (err) {
-    toast(`Couldn't read that page: ${err.message}`);
+  let article = null;
+  if (!error) {
+    try { article = await articleFromHtml(url, html); } catch (_) {}
   }
+  await showBestArticle(url, article, error);
 };
+
+/** Sites behind a bot wall (Cloudflare, CloudFront, a login gate) answer a
+ *  fetch with HTTP 200 and an error page, which extraction happily turns
+ *  into "an article". Reading "403 ERROR Request blocked" aloud is worse
+ *  than saying so, hence these checks. Measured against 37 real pages:
+ *  genuine articles ran from ~230 words up, block pages were under ~90. */
+const BLOCK_PAGE = /just a moment|enable (js|javascript)|captcha|verify you are (a )?human|access denied|are you a robot|security verification|request (blocked|could not be satisfied)|blocked by network security|unusual traffic|attention required|error page|all rights reserved/i;
+const MIN_ARTICLE_WORDS = 120;
+const MIN_SALVAGE_WORDS = 40;
+
+function countWords(s) { return (s.match(/\S+/g) || []).length; }
+function looksBlocked(text) { return BLOCK_PAGE.test(text.trim().slice(0, 400)); }
+function isUsableArticle(a) {
+  return !!a && countWords(a.text) >= MIN_ARTICLE_WORDS && !looksBlocked(a.text);
+}
+
+/** Readability pass over a fetched page's HTML. Resolves to
+ *  { title, tree, text } or null when nothing article-like was found. */
+async function articleFromHtml(url, html) {
+  const articleDoc = new DOMParser().parseFromString(html, "text/html");
+  absolutizeUrls(articleDoc, url);
+
+  const Readability = await loadReadability();
+  const article = new Readability(articleDoc).parse();
+  if (!article?.content || !article.textContent.trim()) return null;
+
+  const contentDoc = new DOMParser().parseFromString(article.content, "text/html");
+  // Readability drops the article's own <h1> when it duplicates the
+  // title it already detected, which is correct for display (setSource
+  // already shows it in the toolbar) but would mean the headline is
+  // simply never spoken — putting it back here is what makes a read of
+  // the article actually start with its title, the way a person would.
+  if (article.title) {
+    const h1 = contentDoc.createElement("h1");
+    h1.textContent = article.title;
+    contentDoc.body.insertBefore(h1, contentDoc.body.firstChild);
+  }
+  const tree = sanitizeHtmlDoc(contentDoc, (src) => (SAFE_IMAGE.test(src) ? src : null));
+  return { title: article.title, tree, text: article.textContent };
+}
+
+/** A rendered page's Markdown starts with its navigation menus (NYT,
+ *  Bloomberg and The Economist all open with hundreds of menu links), which
+ *  would otherwise be read aloud before the article. The article is where
+ *  prose starts: the first line followed closely by more of it, since menus
+ *  are short list items and headings with at most a stray sentence. */
+function trimLeadingBoilerplate(md) {
+  const plain = (s) => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+  const lines = md.split("\n");
+  const isProse = (l) => !/^\s*[*\-+]\s/.test(l) && !l.startsWith("#") && countWords(plain(l)) >= 15;
+  const filled = [];
+  lines.forEach((l, i) => { if (plain(l)) filled.push(i); });
+  for (let k = 0; k < filled.length; k++) {
+    const window = filled.slice(k, k + 6);
+    if (isProse(lines[window[0]]) && window.filter((i) => isProse(lines[i])).length >= 3) {
+      return filled[k] > 0 ? lines.slice(filled[k]).join("\n") : md;
+    }
+  }
+  return md;
+}
+
+/** Second opinion for pages Readability can't make sense of from raw HTML
+ *  — mostly client-rendered ones (Medium, Economist, Stack Overflow,
+ *  Britannica all failed that way). r.jina.ai renders the page in a real
+ *  browser and returns Markdown, which goes through the same Markdown path
+ *  as everything else. Same third-party caveat as fetchHtmlFromWeb. */
+async function articleFromJinaMarkdown(url) {
+  const res = await fetch(`https://r.jina.ai/${url}`, { signal: AbortSignal.timeout(45000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const raw = await res.text();
+  const marker = raw.indexOf("Markdown Content:");
+  const body = marker >= 0 ? raw.slice(marker + "Markdown Content:".length) : raw;
+  const title = (raw.match(/^Title:\s*(.+)$/m) || [])[1]?.trim() || "";
+  const trimmed = trimLeadingBoilerplate(body);
+  const tree = await markdownToDom(trimmed === body || !title ? trimmed : `# ${title}\n\n${trimmed}`);
+  return { title, tree, text: tree.textContent };
+}
+
+/** Picks what to show from the HTML-extraction result (null if it found
+ *  nothing) and, if that isn't a real article, the Markdown fallback. */
+async function showBestArticle(url, htmlArticle, fetchError) {
+  let best = htmlArticle;
+  if (!isUsableArticle(best)) {
+    try {
+      const md = await articleFromJinaMarkdown(url);
+      if (!looksBlocked(md.text) &&
+          (isUsableArticle(md) || !best || countWords(md.text) > countWords(best.text))) best = md;
+    } catch (_) {}
+  }
+  const salvageable = best && countWords(best.text) >= MIN_SALVAGE_WORDS && !looksBlocked(best.text);
+  if (!isUsableArticle(best) && !salvageable) {
+    toast(
+      best || !fetchError
+        ? "Couldn't read that page — the site is probably blocking automated readers."
+        : fetchError
+    );
+    return;
+  }
+
+  exitEpubMode();
+  app.raw = null;   // no raw/rendered toggle for a fetched page
+  app.engine?.stop();
+  app.renderer.clear();
+  app.load(null, best.tree);
+  setSource(best.title || url, url);
+  toast(`Loaded "${best.title || url}"`);
+}
 
 /** True only when the whole trimmed string is nothing but a link — a
  *  sentence that happens to contain a URL should still be read as text,
