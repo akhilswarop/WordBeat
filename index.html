@@ -3657,6 +3657,7 @@ function setWelcome(visible) {
   if (visible) {
     renderRecents();
     welcomeBack.classList.toggle("hidden", app.tokens.length === 0);
+    if (app.tokens.length === 0) setSource("WordBeat");
   }
   layoutOutline();
 }
