@@ -629,6 +629,8 @@ try {
       backdrop-filter: blur(14px) saturate(1.15);
     }
   }
+  /* The tools list (sheet or dropdown) sits under the player in stacking order, so the player steps aside. */
+  .tools-open .player { visibility: hidden; }
   /* While reading, the card shrinks to a pill so the text keeps the screen. */
   .player.mini {
     width: auto; max-width: calc(100vw - 32px);
@@ -1141,7 +1143,6 @@ try {
       width: 36px; height: 4px; border-radius: 2px;
       background: var(--line); margin: 4px auto 8px;
     }
-    .tools-open .player { visibility: hidden; }
   }
 
   /* Respect the system "reduce motion" setting: no fades, slides or spinning
@@ -4239,7 +4240,7 @@ if (!Engine) {
 el.edit.addEventListener("click", () => {
   const editing = !el.editor.classList.contains("hidden");
   if (editing) {
-    loadRaw(el.editor.value, "edited text");
+    loadRaw(el.editor.value, "edited text", { keepScroll: true });
     el.editor.classList.add("hidden");
     el.reader.classList.remove("hidden");
     showEditing(false);
@@ -5062,17 +5063,20 @@ function resetReader(raw = null) {
 function showDocument({ tree, prebuilt, label, fullLabel = label, message = `Loaded ${label}` }) {
   resetReader();
   app.load(null, tree, prebuilt);
+  window.scrollTo(0, 0);
   setSource(label, fullLabel);
   toast(message);
 }
 
 /** Holds on to the untouched source so the Clean markup toggle can switch
  *  between raw and cleaned without needing the original file again. */
-async function loadRaw(raw, label, { forceMarkdown = false, cleanable = true, note = "", html = null, remember = true } = {}) {
+async function loadRaw(raw, label, { forceMarkdown = false, cleanable = true, note = "", html = null, remember = true, keepScroll = false } = {}) {
+  const scrollBefore = window.scrollY;
   resetReader({ text: raw, forceMarkdown, cleanable, html });
   const doc = await prepareDoc(raw, { forceMarkdown, cleanable, html });
   if (doc.tree) await highlightCodeBlocks(doc.tree);
   app.load(doc.text, doc.tree);
+  window.scrollTo(0, keepScroll ? scrollBefore : 0);
   setSource(label);
   toast(`Loaded ${label}${note}`);
   if (remember) rememberText(raw, label);
