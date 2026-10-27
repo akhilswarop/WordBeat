@@ -620,19 +620,6 @@ try {
   }
   /* The tools list (sheet or dropdown) sits under the player in stacking order, so the player steps aside. */
   .tools-open .player { visibility: hidden; }
-  /* While reading, the card shrinks to a pill so the text keeps the screen. */
-  .player.mini {
-    width: auto; max-width: calc(100vw - 32px);
-    display: flex; align-items: center; gap: 10px;
-    padding: 5px 18px 5px 5px; border-radius: 40px; cursor: pointer;
-  }
-  .player.mini .p-bar, .player.mini #timingMode,
-  .player.mini .p-controls > :not(.play-btn) { display: none; }
-  .player.mini .p-controls { order: -1; margin: 0; min-height: 0; }
-  .player.mini .p-times { margin: 0; gap: 6px; justify-content: flex-start; }
-  .player.mini #tTotal::before { content: "/ "; }
-  .player.mini .play-btn { width: 40px; height: 40px; }
-
 
   .p-bar {
     position: relative;
@@ -773,7 +760,6 @@ try {
     .dial { position: relative; right: auto; top: auto; transform: none; margin-left: 6px; }
     .play-btn { width: 44px; height: 44px; }
     #timingMode { display: none; }
-    .player.mini { display: flex; }
   }
 
   /* ----------------------------- welcome ----------------------------- */
@@ -1400,9 +1386,6 @@ try {
 
   <button type="button" class="sp-switch" id="spFocus" role="switch" aria-checked="false">
     <span>Focus mode</span><kbd>F</kbd><span class="sp-track" aria-hidden="true"></span>
-  </button>
-  <button type="button" class="sp-switch" id="spMini" role="switch" aria-checked="true">
-    <span>Shrink player while reading</span><span class="sp-track" aria-hidden="true"></span>
   </button>
 </div>
 <div class="scrim hidden" id="scrim"></div>
@@ -2569,6 +2552,10 @@ async function extractDocx(file) {
 // estimate.
 const BOUNDARY_PROBE_MS = 700;
 
+// After this many utterances in a row fail with no way to recover, playback
+// stops with a message instead of skipping silently through the document.
+const MAX_CONSECUTIVE_SPEECH_ERRORS = 3;
+
 class WebSpeechEngine {
   constructor({ onWord, onStateChange, onTimingMode, onDone, onBuffering }) {
     this.onWord = onWord;
@@ -2584,6 +2571,13 @@ class WebSpeechEngine {
     this.rate = 1;
     this.voice = null;
     this.state = "idle";
+
+    // Set by the page: onVoiceFallback(failedVoice, error) returns a local
+    // voice to retry the chunk with (or null); onSpeechFailed(error) is told
+    // when playback gave up.
+    this.onVoiceFallback = null;
+    this.onSpeechFailed = null;
+    this._failures = 0;
 
     this._raf = null;
     this._estimateStart = 0;
@@ -2638,6 +2632,7 @@ class WebSpeechEngine {
 
     u.onstart = () => {
       if (gen !== this.generation) return;
+      this._failures = 0;
       // The gap between requesting this utterance and this event is the
       // one a network voice's request round-trip actually shows up in —
       // a local voice clears it almost immediately.
@@ -2663,6 +2658,24 @@ class WebSpeechEngine {
       this.onBuffering?.(false);
       if (e.error === "interrupted" || e.error === "canceled") return;
       this._stopEstimator();
+      this._failures++;
+
+      // A network voice can fail where a local one never would (offline, a
+      // blocked service, a policy). Say so and retry this same chunk with a
+      // local voice rather than skipping the whole document in silence.
+      const failed = this.voice;
+      const replacement = failed && !failed.localService ? this.onVoiceFallback?.(failed, e.error) : null;
+      if (replacement) {
+        this.voice = replacement;
+        this._failures = 0;
+        this._speakCurrent();
+        return;
+      }
+      if (this._failures >= MAX_CONSECUTIVE_SPEECH_ERRORS) {
+        this.stop();
+        this.onSpeechFailed?.(e.error);
+        return;
+      }
       this.cursor++;
       this._speakCurrent();
     };
@@ -3282,32 +3295,12 @@ window.addEventListener("scroll", () => {
 }, { passive: true });
 window.addEventListener("resize", layoutOutline);
 
-/* --- player: shrinking and swiping ---
- * The card shrinks to a pill after a few idle seconds of playback and grows
- * back on a tap, on keyboard focus, or when playback stops. A horizontal
- * swipe on the card skips a sentence. */
-const PLAYER_IDLE_MS = 5000;
+/* --- player: swiping ---
+ * A horizontal swipe on the card skips a sentence. */
 const SWIPE_MIN_PX = 56;
 const SWIPE_MAX_OFF_AXIS_PX = 36;
 const SWIPE_MAX_MS = 700;
 const playerDock = document.querySelector(".player");
-
-/** Runs setMini(true) once delayMs passes without another schedule() call. */
-function createShrinkScheduler({ delayMs, setMini, canShrink = () => true, timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (handle) => clearTimeout(handle) } }) {
-  let handle = null;
-  const cancel = () => {
-    if (handle !== null) timers.clear(handle);
-    handle = null;
-  };
-  return {
-    cancel,
-    expand() { cancel(); setMini(false); },
-    schedule() {
-      cancel();
-      handle = timers.set(() => { handle = null; if (canShrink()) setMini(true); }, delayMs);
-    },
-  };
-}
 
 /** -1 (swipe right: back), 1 (swipe left: forward) or 0 when the gesture is not a swipe. */
 function swipeDirection(start, end) {
@@ -3316,41 +3309,6 @@ function swipeDirection(start, end) {
   if (end.t - start.t > SWIPE_MAX_MS) return 0;
   if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dy) > SWIPE_MAX_OFF_AXIS_PX) return 0;
   return dx < 0 ? 1 : -1;
-}
-
-function isPlayingNow() {
-  return app.engine?.state === "playing";
-}
-
-const playerShrinker = createShrinkScheduler({
-  delayMs: PLAYER_IDLE_MS,
-  setMini: (mini) => playerDock.classList.toggle("mini", mini),
-  // Keyboard focus inside the card means someone is using it: leave it open.
-  canShrink: () => prefs.miniPlayer && isPlayingNow() && !playerDock.querySelector(":focus-visible"),
-});
-
-/** Re-evaluates shrinking after playback state or the preference changes. */
-function syncPlayerShrink() {
-  if (prefs.miniPlayer && isPlayingNow()) playerShrinker.schedule();
-  else playerShrinker.expand();
-}
-
-function expandPlayer() {
-  playerShrinker.expand();
-  syncPlayerShrink();
-}
-
-playerDock.addEventListener("click", (e) => {
-  if (playerDock.classList.contains("mini") && !e.target.closest(".play-btn")) expandPlayer();
-});
-playerDock.addEventListener("focusin", (e) => {
-  if (playerDock.classList.contains("mini") && e.target.matches(":focus-visible")) expandPlayer();
-});
-// Any use of the open card postpones shrinking.
-for (const type of ["pointerdown", "keydown", "wheel"]) {
-  playerDock.addEventListener(type, () => {
-    if (prefs.miniPlayer && isPlayingNow() && !playerDock.classList.contains("mini")) playerShrinker.schedule();
-  }, { passive: true });
 }
 
 let swipeStart = null;
@@ -3389,7 +3347,7 @@ const READER_SIZE_MIN = 16;
 const READER_SIZE_MAX = 30;
 const THEME_BAR_COLORS = { dark: "#101218", light: "#eef0f6", sepia: "#ece0c8", oled: "#000000" };
 const LIGHT_THEMES = ["light", "sepia"];
-const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true };
+const DEFAULT_PREFS = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false };
 
 /** "auto" follows the system; every other choice is itself the theme. */
 function resolveTheme(choice, systemPrefersLight) {
@@ -3415,7 +3373,6 @@ function normalizePrefs(raw) {
     spacing: oneOf(Object.keys(LINE_SPACINGS), source.spacing, DEFAULT_PREFS.spacing),
     width: oneOf(Object.keys(MEASURES_EM), source.width, DEFAULT_PREFS.width),
     focus: source.focus === true,
-    miniPlayer: source.miniPlayer !== false,
   };
 }
 
@@ -3425,7 +3382,6 @@ const settingsScrim = document.getElementById("scrim");
 const settingsSize = document.getElementById("spSize");
 const settingsSizeValue = document.getElementById("spSizeVal");
 const settingsFocus = document.getElementById("spFocus");
-const settingsMini = document.getElementById("spMini");
 const systemLightQuery = matchMedia("(prefers-color-scheme: light)");
 
 function applyPrefs() {
@@ -3441,7 +3397,6 @@ function applyPrefs() {
   root.style.setProperty("--measure-em", String(MEASURES_EM[prefs.width]));
   root.classList.toggle("focus-mode", prefs.focus);
   syncSettingsPanel();
-  syncPlayerShrink();
   layoutOutline();
 }
 
@@ -3463,7 +3418,6 @@ function syncSettingsPanel() {
   settingsSize.value = String(prefs.size);
   settingsSizeValue.textContent = `${prefs.size} px`;
   settingsFocus.setAttribute("aria-checked", String(prefs.focus));
-  settingsMini.setAttribute("aria-checked", String(prefs.miniPlayer));
 }
 
 function settingsOpen() {
@@ -3502,7 +3456,6 @@ settingsPanel.addEventListener("click", (e) => {
 });
 settingsSize.addEventListener("input", () => updatePref({ size: Number(settingsSize.value) }));
 settingsFocus.addEventListener("click", () => updatePref({ focus: !prefs.focus }));
-settingsMini.addEventListener("click", () => updatePref({ miniPlayer: !prefs.miniPlayer }));
 
 // Radio groups move with the arrow keys, like native radios.
 settingsPanel.addEventListener("keydown", (e) => {
@@ -3703,7 +3656,6 @@ function onPlaybackStateChanged(state) {
   renderPlayButton(state);
   if (state === "playing") playbackClock.start();
   else playbackClock.stop();
-  syncPlayerShrink();
 }
 
 /** Single entry point for play/pause/resume, shared by the button and Space. */
@@ -4169,6 +4121,23 @@ if (!Engine) {
       return true;
     };
     autoSelectVoiceForLanguage = desktopAutoSelectVoice;
+
+    // A network voice that fails mid-read is swapped for a local voice of the
+    // same language, and the reader is told why (see WebSpeechEngine).
+    app.engine.onVoiceFallback = (failed, error) => {
+      const voices = speechSynthesis.getVoices();
+      const prefix = (failed.lang || "en").toLowerCase().split("-")[0];
+      let idx = voices.findIndex(v => v.localService && v.lang.toLowerCase().startsWith(prefix));
+      if (idx < 0) idx = voices.findIndex(v => v.localService && /^en/i.test(v.lang));
+      if (idx < 0) return null;
+      userPickedVoice = { name: voices[idx].name, lang: voices[idx].lang };
+      el.voice.value = idx;
+      renderVoicePanelRows();
+      updateVoiceTrigger();
+      toast(`${failed.name} couldn't play (${error}). Switched to ${voices[idx].name}.`);
+      return voices[idx];
+    };
+    app.engine.onSpeechFailed = (error) => toast(`Speech stopped: the voice reported "${error}".`);
 
     loadVoices();
     speechSynthesis.addEventListener("voiceschanged", loadVoices);

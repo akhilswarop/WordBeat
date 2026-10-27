@@ -316,7 +316,7 @@ describe("markdown helpers", () => {
 });
 
 describe("normalizePrefs", () => {
-  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false, miniPlayer: true };
+  const defaults = { theme: "dark", font: "serif", size: 20, spacing: "normal", width: "medium", focus: false };
 
   it("returns the defaults for nothing, garbage or a non-object", () => {
     assert.deepEqual(plain(app.normalizePrefs(null)), defaults);
@@ -325,7 +325,7 @@ describe("normalizePrefs", () => {
   });
 
   it("accepts a JSON string or an object", () => {
-    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true, miniPlayer: false };
+    const saved = { theme: "sepia", font: "sans", size: 24, spacing: "airy", width: "wide", focus: true };
     assert.deepEqual(plain(app.normalizePrefs(JSON.stringify(saved))), saved);
     assert.deepEqual(plain(app.normalizePrefs(saved)), saved);
   });
@@ -361,60 +361,6 @@ describe("resolveTheme", () => {
   it("returns every other choice unchanged", () => {
     assert.equal(app.resolveTheme("sepia", true), "sepia");
     assert.equal(app.resolveTheme("oled", false), "oled");
-  });
-});
-
-describe("createShrinkScheduler", () => {
-  // A fake clock: timers run only when the test says so.
-  function makeScheduler({ canShrink = () => true } = {}) {
-    const calls = [];
-    const pending = new Map();
-    let nextId = 1;
-    const timers = {
-      set: (fn, ms) => { pending.set(nextId, { fn, ms }); return nextId++; },
-      clear: (id) => pending.delete(id),
-    };
-    const scheduler = app.createShrinkScheduler({ delayMs: 5000, setMini: (v) => calls.push(v), canShrink, timers });
-    const fire = () => { for (const [id, t] of [...pending]) { pending.delete(id); t.fn(); } };
-    return { scheduler, calls, pending, fire };
-  }
-
-  it("shrinks once the delay passes", () => {
-    const { scheduler, calls, pending, fire } = makeScheduler();
-    scheduler.schedule();
-    assert.equal(pending.size, 1);
-    assert.deepEqual(calls, []);
-    fire();
-    assert.deepEqual(calls, [true]);
-  });
-
-  it("restarts the wait when scheduled again", () => {
-    const { scheduler, pending } = makeScheduler();
-    scheduler.schedule();
-    scheduler.schedule();
-    assert.equal(pending.size, 1);
-  });
-
-  it("expands at once and cancels a pending shrink", () => {
-    const { scheduler, calls, pending, fire } = makeScheduler();
-    scheduler.schedule();
-    scheduler.expand();
-    fire();
-    assert.equal(pending.size, 0);
-    assert.deepEqual(calls, [false]);
-  });
-
-  it("works with the real timers when none are injected", () => {
-    const scheduler = app.createShrinkScheduler({ delayMs: 60000, setMini() {} });
-    scheduler.schedule();    // the real setTimeout rejects being called as a method
-    scheduler.cancel();
-  });
-
-  it("does not shrink while canShrink says no", () => {
-    const { scheduler, calls, fire } = makeScheduler({ canShrink: () => false });
-    scheduler.schedule();
-    fire();
-    assert.deepEqual(calls, []);
   });
 });
 
@@ -519,5 +465,62 @@ describe("titleFromText", () => {
     const title = app.titleFromText("x".repeat(100));
     assert.equal(title.length, 60);
     assert.ok(title.endsWith("…"));
+  });
+});
+
+describe("WebSpeechEngine voice failures", () => {
+  const vm = require("vm");
+  const Engine = vm.runInContext("WebSpeechEngine", app);
+  const network = { name: "Net", lang: "en-GB", localService: false };
+  const local = { name: "Local", lang: "en-GB", localService: true };
+
+  function makeEngine(voice, handlers = {}) {
+    const spoken = [];
+    const engine = new Engine({ onWord() {}, onStateChange() {}, onTimingMode() {}, onDone() {}, onBuffering() {} });
+    engine.synth = { speak: (u) => spoken.push(u), cancel() {} };
+    Object.assign(engine, handlers);
+    engine.voice = voice;
+    engine.speak([{ text: "one.", charOffset: 0 }, { text: "two.", charOffset: 5 }, { text: "three.", charOffset: 10 }, { text: "four.", charOffset: 16 }]);
+    return { engine, spoken };
+  }
+
+  it("retries the same chunk with the replacement when a network voice fails", () => {
+    const { engine, spoken } = makeEngine(network, { onVoiceFallback: () => local });
+    spoken[0].onerror({ error: "network" });
+    assert.equal(spoken.length, 2);
+    assert.equal(spoken[1].voice, local);
+    assert.equal(engine.cursor, 0);   // still on the first chunk, not skipped past it
+  });
+
+  it("does not fall back for a local voice or for an interruption", () => {
+    let asked = 0;
+    const { spoken } = makeEngine(local, { onVoiceFallback: () => { asked++; return local; } });
+    spoken[0].onerror({ error: "synthesis-failed" });
+    assert.equal(asked, 0);
+    const second = makeEngine(network, { onVoiceFallback: () => { asked++; return local; } });
+    second.spoken[0].onerror({ error: "interrupted" });
+    assert.equal(asked, 0);
+  });
+
+  it("stops and reports after three failures in a row with no fallback", () => {
+    let failure = null;
+    const { engine, spoken } = makeEngine(local, { onSpeechFailed: (e) => { failure = e; } });
+    spoken[0].onerror({ error: "synthesis-failed" });
+    spoken[1].onerror({ error: "synthesis-failed" });
+    assert.equal(failure, null);
+    spoken[2].onerror({ error: "synthesis-failed" });
+    assert.equal(failure, "synthesis-failed");
+    assert.equal(engine.state, "idle");
+    assert.equal(spoken.length, 3);
+  });
+
+  it("a started utterance resets the failure count", () => {
+    let failure = null;
+    const { spoken } = makeEngine(local, { onSpeechFailed: (e) => { failure = e; } });
+    spoken[0].onerror({ error: "synthesis-failed" });
+    spoken[1].onerror({ error: "synthesis-failed" });
+    spoken[2].onstart();
+    spoken[2].onerror({ error: "synthesis-failed" });
+    assert.equal(failure, null);
   });
 });
